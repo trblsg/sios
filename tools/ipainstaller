@@ -1,0 +1,165 @@
+#!/var/jb/bin/sh
+# ipainstaller: put an .ipa's app under /var/jb/Applications, the rootless prefix's application directory.
+#
+# Scion's kernel replaces Apple's code-signing policy with a stub (libkern/amfi/miniamfi.c): an app
+# needs no Apple ID, no AppSync and no TrollStore. What it needs is a prefix and LaunchServices'
+# registration of its bundle, which uicache does -- the same route Sileo itself takes here.
+#
+# The IPA is unpacked into a temporary directory, its single Payload/NAME.app is copied to
+# /var/jb/Applications/NAME.app, owned by root:wheel, and every Mach-O in it is given an ad-hoc
+# signature with ldid when ldid is installed. The signature is what carries entitlements; without
+# one an unsigned app still runs at security=bringup, but it has no entitlements (keychain, app
+# groups, push). This script is shipped at /var/jb/usr/bin/ipainstaller by the s9-installer workflow.
+#
+# Run as root:
+#   ipainstaller /var/mobile/Documents/App.ipa
+#   ipainstaller -f /var/mobile/Documents/App.ipa     # replace the copy already installed
+#   ipainstaller -n /var/mobile/Documents/App.ipa     # do not sign; install the files as they are
+#
+# No FairPlay: an App Store IPA is encrypted, and this kernel runs it no better than a real phone
+# without a decryption step. This project does not decrypt, crack or strip apps.
+
+set -eu
+umask 022
+
+PREFIX=/var/jb
+APPS=$PREFIX/Applications
+UNZIP=$PREFIX/usr/bin/unzip
+UICACHE=$PREFIX/usr/bin/uicache
+LDID=$PREFIX/usr/bin/ldid
+REALPATH=$PREFIX/usr/bin/realpath
+
+PATH=$PREFIX/usr/bin:$PREFIX/bin:$PREFIX/usr/sbin:$PREFIX/sbin:/usr/bin:/bin:/usr/sbin:/sbin
+export PATH
+
+FORCE=0
+SIGN=1
+TMP=
+
+usage() {
+	cat >&2 <<'EOF'
+usage: ipainstaller [-f] [-n] FILE.ipa
+
+  -f  replace an application already in /var/jb/Applications
+  -n  do not sign the Mach-O files (ldid -S); install them as the IPA has them
+
+Run as root. The IPA is unpacked; its Payload/NAME.app is copied to
+/var/jb/Applications/NAME.app, owned by root:wheel, and registered with uicache -p.
+EOF
+	exit 2
+}
+
+die() {
+	echo "ipainstaller: $*" >&2
+	exit 1
+}
+
+cleanup() {
+	[ -z "$TMP" ] || rm -rf "$TMP"
+}
+trap cleanup EXIT HUP INT TERM
+
+while getopts fhn opt; do
+	case $opt in
+	f) FORCE=1 ;;
+	n) SIGN=0 ;;
+	*) usage ;;
+	esac
+done
+shift $((OPTIND - 1))
+[ $# -eq 1 ] || usage
+IPA=$1
+
+[ "$(id -u)" = 0 ] || die "run as root (sudo $0 ...)"
+[ -f "$IPA" ] || die "no such file: $IPA"
+[ -x "$UNZIP" ] || die "$UNZIP is missing: the prefix is not complete (apt install unzip)"
+[ -x "$UICACHE" ] || die "$UICACHE is missing: the prefix is not complete (uikittools)"
+mkdir -p "$APPS" || die "cannot create $APPS"
+[ -w "$APPS" ] || die "$APPS is not writable (is /var/jb mounted?)"
+
+TMP=$(mktemp -d "${TMPDIR:-/private/var/tmp}/ipainstaller.XXXXXX") || die "mktemp failed"
+LIST=$TMP/list
+
+# -Z1 is zipinfo's list of names: no extraction yet, so a path that climbs out of the archive is
+# refused before anything is written.
+"$UNZIP" -Z1 "$IPA" > "$TMP/raw" 2>/dev/null || die "not a zip: $IPA"
+sed 's|^\./||' "$TMP/raw" > "$LIST"
+[ -s "$LIST" ] || die "empty zip: $IPA"
+
+bad=$(grep -E '(^/|(^|/)\.\.(/|$))' "$LIST" || true)
+[ -z "$bad" ] || die "refusing an entry that escapes the archive: $(printf '%s\n' "$bad" | head -1)"
+
+apps=$(sed -n 's|^Payload/\([^/]*\.app\)/.*|\1|p; s|^Payload/\([^/]*\.app\)$|\1|p' "$LIST" | sort -u)
+count=$(printf '%s\n' "$apps" | grep -c . || true)
+[ "$count" -eq 1 ] || die "expected exactly one Payload/*.app, found $count"
+APPNAME=$apps
+
+mkdir -p "$TMP/unpacked"
+"$UNZIP" -q "$IPA" -d "$TMP/unpacked" || die "unzip failed: $IPA"
+
+SRC=$TMP/unpacked/Payload/$APPNAME
+[ ! -L "$SRC" ] || die "Payload/$APPNAME is a symbolic link"
+[ -d "$SRC" ] || die "Payload/$APPNAME is not a directory"
+[ -f "$SRC/Info.plist" ] || die "Payload/$APPNAME has no Info.plist"
+
+# A bundle is allowed its own links (a framework's Versions/Current, for one), but nothing may
+# point out of the IPA: an app installed as root is not the place for that.
+if [ -x "$REALPATH" ]; then
+	badlink=$(
+		find "$TMP/unpacked" -type l -print | while IFS= read -r link; do
+			target=$("$REALPATH" -m "$link" 2>/dev/null) || { echo "$link (unresolved)"; continue; }
+			case $target in
+			"$TMP/unpacked"/*) ;;
+			*) echo "$link -> $target" ;;
+			esac
+		done
+	)
+	[ -z "$badlink" ] || die "refusing a symbolic link that leaves the archive: $(printf '%s\n' "$badlink" | head -1)"
+fi
+
+[ ! -d "/Applications/$APPNAME" ] || die "/Applications/$APPNAME exists: this IPA would shadow a system application"
+
+DEST=$APPS/$APPNAME
+[ ! -e "$DEST" ] || [ "$FORCE" = 1 ] || die "$DEST is already installed (use -f to replace it)"
+
+# Copy first, sign there, and only then put it in place: a failed install leaves no half app.
+STAGE=$TMP/stage/$APPNAME
+mkdir -p "$TMP/stage"
+cp -a "$SRC" "$STAGE" || die "cannot copy the app"
+chown -R 0:0 "$STAGE" || die "chown failed"
+
+if [ "$SIGN" = 1 ]; then
+	if [ -x "$LDID" ]; then
+		find "$STAGE" -type f -print > "$TMP/files"
+		while IFS= read -r f; do
+			magic=$(dd if="$f" bs=4 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')
+			case $magic in
+			feedface|cefaedfe|feedfacf|cffaedfe|cafebabe|bebafeca|cafebabf|bfbafeca) ;;
+			*) continue ;;
+			esac
+			chmod 0755 "$f" || die "chmod failed: $f"
+			# Keep what the IPA already says about itself: ldid -e prints the entitlements of
+			# its signature, and -S<file> signs with them. Nothing there means -S alone.
+			if "$LDID" -e "$f" > "$TMP/entitlements.plist" 2>/dev/null && [ -s "$TMP/entitlements.plist" ]; then
+				"$LDID" -S"$TMP/entitlements.plist" "$f" || die "ldid failed: $f"
+			else
+				"$LDID" -S "$f" || die "ldid failed: $f"
+			fi
+		done < "$TMP/files"
+	else
+		echo "ipainstaller: no $LDID: installing unsigned (security=bringup runs it; it has no entitlements)" >&2
+	fi
+fi
+
+if [ -e "$DEST" ]; then
+	rm -rf "$DEST" || die "cannot remove $DEST"
+fi
+mv "$STAGE" "$DEST" || die "cannot move the app into $APPS"
+
+out=$("$UICACHE" -p "$DEST" 2>&1) || out="Error: uicache exited with $?"
+case $out in
+*Error*) echo "ipainstaller: uicache: $out" >&2 ;;
+esac
+
+echo "ipainstaller: $APPNAME installed at $DEST"
+echo "ipainstaller: if its icon is not on the home screen yet, respring or reboot"

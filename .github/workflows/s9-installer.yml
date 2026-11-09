@@ -5,7 +5,11 @@
 #   2. unpacks it (sysimage/unpack.sh) and builds the loader's iPhone identity (xnuloader/mkidentity.sh);
 #   3. builds the S9 kernel, the loader, Mesa, the small root (ALONE=1 RC=rc.launchd) and the system image;
 #   4. makes the installer (Scion-Project/scion-installer universal/mkinstaller.sh): Scion's boot image to BOOT,
-#      the system image to the partition given (SYSTEM).
+#      the system image to the partition given (SYSTEM), and a formatted USERDATA: /private/var becomes
+#      persistent there (and Android's data in USERDATA is erased).
+#
+# The image carries the Procursus prefix with Sileo; with tweaks on (the default) ElleKit and PreferenceLoader,
+# and ipainstaller at /var/jb/usr/bin/ipainstaller (docs/IPA.md).
 #
 # The installer carries iOS's own files. This repository is public, and any signed-in GitHub user can download
 # a public repository's artifacts. So the job uploads one 7z archive, AES-256 with its file names encrypted, with
@@ -32,6 +36,13 @@ on:
       time_limit:
         description: A test run's seconds, after which the phone restarts into TWRP with the log (0, no limit)
         default: "0"
+      tweaks:
+        description: ElleKit and PreferenceLoader in the jailbreak prefix (tweak injection; on by default)
+        type: boolean
+        default: true
+      userdata_blocks:
+        description: "USERDATA size in 4096-byte blocks, as DEVICE=BLOCKS (S9 64 GB: starlte=13615227); this FORMATS USERDATA and erases Android's data"
+        default: "starlte=13615227"
 
 concurrency:
   group: s9-installer
@@ -70,7 +81,7 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends build-essential git curl zstd clang lld \
             python3 python3-venv perl xz-utils flex bison m4 autoconf automake libtool-bin uuid-dev llvm \
-            meson ninja-build pkg-config
+            meson ninja-build pkg-config hfsprogs
           curl -L --fail --retry 3 -s "$SEVENZIP_URL" | tar -xJ -C "$W/bin" 7zz
           ln -sf 7zz "$W/bin/7z"
           "$W/bin/7z" i | sed -n 2p
@@ -183,7 +194,7 @@ jobs:
           for d in starlte star2lte crownlte; do
             make ${d}_defconfig > /dev/null
             rm -f hakios-kernel
-            make kernel JOBS=$(nproc) > "$W/kernel-$d.log" 2>&1 || { tail -80 "$W/kernel-$d.log"; exit 1; }
+            make kernel JOBS="$(nproc)" > "$W/kernel-$d.log" 2>&1 || { tail -80 "$W/kernel-$d.log"; exit 1; }
             cp hakios-kernel "$W/kernels/kernel-$d"
             grep -a 'drivers built in' "$W/kernel-$d.log" | tail -1 || true
           done
@@ -197,24 +208,58 @@ jobs:
 
       - name: The small root and the system image (userland/build.sh; Mesa when the cache did not have it)
         working-directory: /mnt/w/k
+        env:
+          TWEAKS: ${{ inputs.tweaks }}
         run: |
-          # Sileo and the Procursus bootstrap, pinned by tools/mk-jb.sh; as scion-installer's build-installer.sh does it
-          PREINSTALL= ELLEKIT= tools/mk-jb.sh > "$W/mk-jb.log" 2>&1 || { tail -40 "$W/mk-jb.log"; exit 1; }
+          # Sileo and the Procursus bootstrap, pinned by tools/mk-jb.sh. Unlike scion-installer's
+          # build-installer.sh (PREINSTALL= ELLEKIT=), this image carries tweak injection: ElleKit
+          # provides mobilesubstrate and loads the tweaks; PreferenceLoader draws their settings panes.
+          # unzip, ldid and libplist3 are what tools/ipainstaller uses. tweaks=false keeps ipainstaller,
+          # drops ElleKit and PreferenceLoader.
+          if [ "$TWEAKS" = "true" ]; then
+            export ELLEKIT=0.4.5
+            export PREINSTALL="debianutils launchctl preferenceloader unzip ldid libplist3"
+          else
+            export ELLEKIT=
+            export PREINSTALL="debianutils launchctl unzip ldid libplist3"
+          fi
+          tools/mk-jb.sh > "$W/mk-jb.log" 2>&1 || { tail -60 "$W/mk-jb.log"; exit 1; }
+          sh -n devices/starlte/tools/ipainstaller
+          install -m 0755 devices/starlte/tools/ipainstaller jb/root/var/jb/usr/bin/ipainstaller
+          test -x jb/root/var/jb/usr/bin/ipainstaller
+          test -x jb/root/var/jb/usr/bin/unzip
+          test -x jb/root/var/jb/usr/bin/ldid
+          if [ "$TWEAKS" = "true" ]; then
+            test -d jb/root/var/jb/usr/lib/TweakInject
+            test -f jb/root/var/jb/usr/lib/TweakLoader.dylib || { echo "::error::ElleKit is not in the prefix (TweakLoader.dylib)"; exit 1; }
+          fi
           (source ./xnu-env.sh && cd userland && GL=1 NO_AIR=1 REST=1 ALONE=1 RC=rc.launchd BT=1 DEVICE=starlte JB_KEPT_ONLY=1 bash build.sh) > "$W/userland.log" 2>&1 ||
             { tail -100 "$W/userland.log"; find xnu-deps/build -name '*.rej' -print -exec cat {} \; 2>/dev/null; exit 1; }
           tail -5 "$W/userland.log"
           ls -la userland/root.apfs userland/system.apfs
 
-      - name: The installer, S9, S9+ and Note9 (scion-installer universal/mkinstaller.sh)
+      - name: The installer, S9, S9+ and Note9 (scion-installer universal/mkinstaller.sh), USERDATA formatted
         env:
           PARTITION: ${{ inputs.partition }}
           BOOT_ARGS: ${{ inputs.boot_args }}
           TIME_LIMIT: ${{ inputs.time_limit }}
+          USERDATA_BLOCKS: ${{ inputs.userdata_blocks }}
         run: |
+          [ -n "$USERDATA_BLOCKS" ] || { echo "::error::userdata_blocks is empty: this workflow always makes /private/var persistent on USERDATA"; exit 1; }
+          UARGS=()
+          for pair in $USERDATA_BLOCKS; do
+            case "$pair" in
+              starlte=*|star2lte=*|crownlte=*) ;;
+              *) echo "::error::userdata_blocks: $pair is not DEVICE=BLOCKS (starlte, star2lte, crownlte)"; exit 1 ;;
+            esac
+            case "${pair#*=}" in *[!0-9]*|'') echo "::error::userdata_blocks: ${pair#*=} is not a number of 4096-byte blocks"; exit 1 ;; esac
+            UARGS+=(-u "$pair")
+          done
           mkdir -p "$W/out"
           SCION_KERNEL="$W/k" "$W/pkg/universal/mkinstaller.sh" -K "$W/k" -s "$W/k/userland/system.apfs" \
             -k starlte="$W/kernels/kernel-starlte" -k star2lte="$W/kernels/kernel-star2lte" -k crownlte="$W/kernels/kernel-crownlte" \
-            -r "$W/k/userland/root.apfs" -p "$PARTITION" -a "starlte=shub=6 bt=7 $BOOT_ARGS" -o "$W/out/scion-exynos9810-installer.zip"
+            -r "$W/k/userland/root.apfs" -p "$PARTITION" -t "$TIME_LIMIT" -U "${UARGS[@]}" \
+            -a "starlte=shub=6 bt=7 $BOOT_ARGS" -o "$W/out/scion-exynos9810-installer-format-userdata.zip"
 
       - name: Encrypt it (the installer inside, untouched), and check the archive
         env:
@@ -223,26 +268,36 @@ jobs:
           TIME_LIMIT: ${{ inputs.time_limit }}
         run: |
           P="$W/pack" && mkdir -p "$P"
-          mv "$W/out/scion-exynos9810-installer.zip" "$P/"
-          (cd "$P" && sha256sum scion-exynos9810-installer.zip > SHA256SUMS)
+          mv "$W/out/scion-exynos9810-installer-format-userdata.zip" "$P/"
+          (cd "$P" && sha256sum scion-exynos9810-installer-format-userdata.zip > SHA256SUMS)
           cat > "$P/README.txt" <<EOF
           Scion for the Galaxy S9 (SM-G960F), built $(date -u +%Y-%m-%d) by $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
           kernel repo $(git -C "$W/k" rev-parse --short HEAD), device repo ${GITHUB_SHA::7}, system image to $PARTITION
 
-          1. Check the zip: sha256sum -c SHA256SUMS   (or compare with: shasum -a 256 scion-exynos9810-installer.zip)
-          2. In TWRP, back up Boot, $PARTITION and EFS first and copy the backup off the phone.
-          3. Copy scion-exynos9810-installer.zip to the phone (adb push or microSD: adb sideload cannot take a zip over 2 GB) and flash it: Install > the zip > swipe.
-             Flash this zip as it is: do not unpack it.
+          THIS INSTALLER FORMATS USERDATA AS HFS PLUS: IT ERASES ANDROID'S DATA IN USERDATA
+          (apps, photos, accounts). It is what makes /private/var persistent, so that the jailbreak
+          prefix (/var/jb: Sileo, ElleKit, PreferenceLoader, ipainstaller) lasts across boots.
+
+          1. Check the zip: sha256sum -c SHA256SUMS   (or compare with: shasum -a 256 scion-exynos9810-installer-format-userdata.zip)
+          2. In TWRP, back up Boot, $PARTITION, EFS and USERDATA first and copy the backup off the phone.
+          3. Copy scion-exynos9810-installer-format-userdata.zip to the phone (adb push or microSD: adb sideload cannot take a zip over 2 GB) and flash it: Install > the zip > swipe.
+             Flash this zip as it is: do not unpack it, and keep "format-userdata" in its file name;
+             TWRP's update-binary refuses the zip without it.
           4. Reboot > System. To leave Scion: five fingers held on the screen for 1.5 s (back to TWRP), or Vol Down + Power.
           $([ "$TIME_LIMIT" = 0 ] || echo "   A test run: after $TIME_LIMIT s it restarts into TWRP by itself. Pull the log then (/sys/fs/pstore/pmsg-ramoops-0).")
-          Android back: restore the Boot and $PARTITION backups in TWRP.
+          Android back: restore the Boot, $PARTITION and USERDATA backups in TWRP.
+
+          After the first boot Sileo appears on the home screen (the prefix is copied to /var/jb about
+          30 s after SpringBoard). The IPA installer is /var/jb/usr/bin/ipainstaller; docs/IPA.md says how.
+          From a terminal (Sileo > Havoc > NewTerm 3): sudo /var/jb/usr/bin/ipainstaller FILE.ipa
+          (mobile's default password is "alpine"; change it with passwd).
           EOF
-          A="$W/upload/scion-exynos9810-installer.7z" && mkdir -p "$W/upload"
-          (cd "$P" && 7z a -t7z -mx=0 -mhe=on -p"$PASS" "$A" scion-exynos9810-installer.zip SHA256SUMS README.txt > /dev/null)
+          A="$W/upload/scion-exynos9810-installer-format-userdata.7z" && mkdir -p "$W/upload"
+          (cd "$P" && 7z a -t7z -mx=0 -mhe=on -p"$PASS" "$A" scion-exynos9810-installer-format-userdata.zip SHA256SUMS README.txt > /dev/null)
           # the archive opens with the passphrase, and the zip inside is the one made above
           7z t -p"$PASS" "$A" > /dev/null
           want=$(cut -d' ' -f1 "$P/SHA256SUMS")
-          got=$(7z x -so -p"$PASS" "$A" scion-exynos9810-installer.zip | sha256sum | cut -d' ' -f1)
+          got=$(7z x -so -p"$PASS" "$A" scion-exynos9810-installer-format-userdata.zip | sha256sum | cut -d' ' -f1)
           [ "$got" = "$want" ] || { echo "::error::the zip inside the archive is not the installer"; exit 1; }
           rm -rf "$P"
           ls -la "$A"
@@ -250,8 +305,8 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: scion-exynos9810-installer
-          path: /mnt/w/upload/scion-exynos9810-installer.7z
+          name: scion-exynos9810-installer-format-userdata
+          path: /mnt/w/upload/scion-exynos9810-installer-format-userdata.7z
           compression-level: 0
           retention-days: 3
 

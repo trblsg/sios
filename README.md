@@ -400,19 +400,33 @@ Ubuntu runner:
 1. It downloads iOS 16.5 (20F66) for iPhone10,3 from Apple's CDN, checked by size and hash, and unpacks it.
 2. It builds the S9 kernel, the loader with the iPhone identity, Mesa, the small root and the system image.
 3. It makes the TWRP installer (scion-installer), with the system image going to SYSTEM unless the run says
-   otherwise.
+   otherwise. The installer also formats USERDATA as HFS Plus and makes `/private/var` persistent, which is what
+   lets the jailbreak prefix survive a boot. **This erases Android's data in USERDATA.**
+4. The prefix carries the Procursus bootstrap with Sileo. With `tweaks` on (the default) it also carries ElleKit
+   and PreferenceLoader; in both cases it carries `ipainstaller` at `/var/jb/usr/bin/ipainstaller`
+   ([docs/IPA.md](docs/IPA.md)).
 
-The artifact `scion-s9-installer` is a 7z archive, AES-256 with its file names hidden. Its passphrase is the
-repository secret `INSTALLER_PASSPHRASE`, and the job refuses to run without it. The installer carries iOS's own
-files, and anyone signed in to GitHub can download a public repository's artifacts. Artifacts are kept for 3 days.
+The artifact `scion-exynos9810-installer-format-userdata` is a 7z archive, AES-256 with its file names hidden. Its
+passphrase is the repository secret `INSTALLER_PASSPHRASE`, and the job refuses to run without it. The installer
+carries iOS's own files, and anyone signed in to GitHub can download a public repository's artifacts. Artifacts are
+kept for 3 days.
 
 To use it:
 1. Download the artifact.
-2. Open the archive with the passphrase (`7zz x scion-s9-installer.7z`, or Keka / 7-Zip).
+2. Open the archive with the passphrase (`7zz x scion-exynos9810-installer-format-userdata.7z`, or Keka / 7-Zip).
 3. Check `SHA256SUMS`.
-4. Flash `scion-starlte-installer.zip` from TWRP as it is.
+4. In TWRP, back up Boot, SYSTEM, EFS and USERDATA first and copy the backup off the phone. **This installer
+   erases Android's data in USERDATA** (apps, photos, accounts); that is what makes `/private/var` persistent.
+5. Flash `scion-exynos9810-installer-format-userdata.zip` from TWRP as it is. Keep `format-userdata` in its file
+   name: TWRP's update-binary refuses the zip without it.
+6. Reboot. Sileo appears on the home screen after about 30 seconds (the prefix is copied to `/var/jb`); see
+   [docs/IPA.md](docs/IPA.md) for `ipainstaller`.
 
-The run's inputs: the kernel and packaging refs, the partition, and extra boot-arguments.
+The run's inputs: the kernel and packaging refs, the partition, extra boot-arguments, the time limit, `tweaks`
+(default `true`, ElleKit and PreferenceLoader), and `userdata_blocks` (default `starlte=13615227`, in 4096-byte
+blocks; **it formats USERDATA**, so the size must match the phone). 13615227 blocks is the S9 64 GB's
+55,767,969,792-byte USERDATA; for the S9+ or Note9 add their sizes (`star2lte=... crownlte=...`), or the installer
+refuses `-U` on those phones.
 
 ## Storage: iOS from the phone's flash
 
@@ -535,7 +549,9 @@ var_hfs=ufs_USERDATA_data` it is HFS Plus in Android's USERDATA, given up for it
 runs. This is the POCO's data volume (`docs/u-boot.md` in the kernel repository, "The data volume") with USERDATA in
 place of the POCO's `darwin`. Seen working on the phone: what iOS keeps in `/private/var`
 is there at the next boot. `ufs_write=1 var_hfs=ufs_USERDATA_data` are defaults; without the volume made (below), init
-falls back to the memory filesystem.
+falls back to the memory filesystem. The CI installer with `-U`
+(`scion-exynos9810-installer-format-userdata.zip`) makes this volume and then seeds the jailbreak prefix to
+`/var/jb`; **it erases Android's data in USERDATA.**
 
 - **Writes go through the loader**, as the reads do (`ufs=2`): the loader calls Silicium's `UfsDxe` `WriteBlocks` on
   core 0. The kernel's own UFS driver (`ufs_native_write=`) is not used: none of its steps has run on the phone yet.
