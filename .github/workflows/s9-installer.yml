@@ -230,8 +230,24 @@ jobs:
           test -x jb/root/var/jb/usr/bin/unzip
           test -x jb/root/var/jb/usr/bin/ldid
           if [ "$TWEAKS" = "true" ]; then
-            test -d jb/root/var/jb/usr/lib/TweakInject
-            test -f jb/root/var/jb/usr/lib/TweakLoader.dylib || { echo "::error::ElleKit is not in the prefix (TweakLoader.dylib)"; exit 1; }
+            test -d jb/root/var/jb/usr/lib/TweakInject || { echo "::error::ElleKit did not install (no usr/lib/TweakInject): does the kernel ref's tools/mk-jb.sh support ELLEKIT?"; exit 1; }
+            # ElleKit ships TweakLoader.dylib as an absolute link to /var/jb/usr/lib/ellekit/
+            # libinjector.dylib: on the runner /var/jb does not exist, so test -f must not follow
+            # it there. Follow it by hand into the tree that becomes /jb; a regular file is taken
+            # as it is.
+            loader=jb/root/var/jb/usr/lib/TweakLoader.dylib
+            if [ -L "$loader" ]; then
+              target=$(readlink "$loader")
+              case $target in
+                /var/jb/*) target=jb/root$target ;;
+                /*) target=jb/root/var/jb$target ;;
+                *) target=jb/root/var/jb/usr/lib/$target ;;
+              esac
+            else
+              target=$loader
+            fi
+            test -f "$target" || { echo "::error::ElleKit is not in the prefix (TweakLoader.dylib -> $target is missing)"; exit 1; }
+            test -f jb/root/var/jb/usr/lib/ellekit/libinjector.dylib
           fi
           (source ./xnu-env.sh && cd userland && GL=1 NO_AIR=1 REST=1 ALONE=1 RC=rc.launchd BT=1 DEVICE=starlte JB_KEPT_ONLY=1 bash build.sh) > "$W/userland.log" 2>&1 ||
             { tail -100 "$W/userland.log"; find xnu-deps/build -name '*.rej' -print -exec cat {} \; 2>/dev/null; exit 1; }
