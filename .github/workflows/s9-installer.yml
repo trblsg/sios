@@ -89,6 +89,16 @@ jobs:
           git -C "$W/k/devices/starlte" checkout -q "$GITHUB_SHA"
           # the S9+ and the Note9, at the revisions the kernel repository pins
           (cd "$W/k" && python3 tools/hakios-device.py sync star2lte crownlte 2>&1 | tail -3 || true)
+          # The kernel's Mesa patches are applied in name order by tools/mk-mesa.sh: panfrost-darwin.patch
+          # (29 October) changes the meson.build line that turnip-darwin.patch, last by name, still expects,
+          # so the build stops at "1 out of 1 hunk FAILED -- saving rejects to file meson.build.rej". This
+          # repository carries the corrected two patches until kernel_ref does; --check makes it a no-op then.
+          if git -C "$W/k" apply --check "$W/k/devices/starlte/tools/mesa-patch-order.fix" 2>/dev/null; then
+            git -C "$W/k" apply "$W/k/devices/starlte/tools/mesa-patch-order.fix"
+            echo "Mesa: the turnip/panfrost patch order fixed"
+          else
+            echo "Mesa: no patch-order fix needed (kernel_ref already has it, or its patches changed)"
+          fi
           for r in "$W/k" "$W/k/devices/starlte" "$W/pkg"; do echo "$r: $(git -C "$r" log --oneline -1)"; done
           echo "MESA_KEY=$(cd "$W/k" && cat tools/mk-mesa.sh tools/mesa/*.patch tools/mesa/hakios-drm/* | sha256sum | cut -c1-16)" >> "$GITHUB_ENV"
           echo "DEPS_KEY=$(sha256sum "$W/k/xnu-deps/setup.sh" | cut -c1-16)" >> "$GITHUB_ENV"
@@ -191,7 +201,7 @@ jobs:
           # Sileo and the Procursus bootstrap, pinned by tools/mk-jb.sh; as scion-installer's build-installer.sh does it
           PREINSTALL= ELLEKIT= tools/mk-jb.sh > "$W/mk-jb.log" 2>&1 || { tail -40 "$W/mk-jb.log"; exit 1; }
           (source ./xnu-env.sh && cd userland && GL=1 NO_AIR=1 REST=1 ALONE=1 RC=rc.launchd BT=1 DEVICE=starlte JB_KEPT_ONLY=1 bash build.sh) > "$W/userland.log" 2>&1 ||
-            { tail -100 "$W/userland.log"; exit 1; }
+            { tail -100 "$W/userland.log"; find xnu-deps/build -name '*.rej' -print -exec cat {} \; 2>/dev/null; exit 1; }
           tail -5 "$W/userland.log"
           ls -la userland/root.apfs userland/system.apfs
 

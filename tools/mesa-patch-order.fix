@@ -1,0 +1,40 @@
+diff --git a/tools/mesa/panvk/panvk-darwin.patch b/tools/mesa/panvk/panvk-darwin.patch
+index 51b21a3..0d2d5d4 100644
+--- a/tools/mesa/panvk/panvk-darwin.patch
++++ b/tools/mesa/panvk/panvk-darwin.patch
+@@ -20,8 +20,8 @@ MIT, applies to the lines it adds). Written for Scion; no other project's patch
+    # dependencies (such as vk-runtime) linking to it
+    dep_libdrm = null_dep
+  endif
+--if host_machine.system() == 'darwin' and (with_gallium_freedreno or with_gallium_panfrost)
+-+if host_machine.system() == 'darwin' and (with_gallium_freedreno or with_gallium_panfrost or with_panfrost_vk)
++-if host_machine.system() == 'darwin' and (with_gallium_freedreno or with_gallium_panfrost or with_freedreno_vk)
+++if host_machine.system() == 'darwin' and (with_gallium_freedreno or with_gallium_panfrost or with_freedreno_vk or with_panfrost_vk)
+    # No DRM on this system: freedreno's requests go to the kernel's driver through a stand-in
+    # for libdrm (src/hakios-drm, put there by Darwin on redwood's tools/mk-mesa.sh; its one
+    # source file is built with freedreno's drm layer, src/freedreno/drm, or, without freedreno,
+diff --git a/tools/mesa/turnip-darwin.patch b/tools/mesa/turnip-darwin.patch
+index b79c641..cf45acb 100644
+--- a/tools/mesa/turnip-darwin.patch
++++ b/tools/mesa/turnip-darwin.patch
+@@ -2,15 +2,16 @@ diff --git a/meson.build b/meson.build
+ index f055df1..457fe06 100644
+ --- a/meson.build
+ +++ b/meson.build
+-@@ -1716,7 +1716,7 @@ else
++@@ -1716,8 +1716,8 @@ else
+    # dependencies (such as vk-runtime) linking to it
+    dep_libdrm = null_dep
+  endif
+--if host_machine.system() == 'darwin' and with_gallium_freedreno
+-+if host_machine.system() == 'darwin' and (with_gallium_freedreno or with_freedreno_vk)
++-if host_machine.system() == 'darwin' and (with_gallium_freedreno or with_gallium_panfrost)
+++if host_machine.system() == 'darwin' and (with_gallium_freedreno or with_gallium_panfrost or with_freedreno_vk)
+    # No DRM on this system: freedreno's requests go to the kernel's driver through a stand-in
+    # for libdrm (src/hakios-drm, put there by Darwin on redwood's tools/mk-mesa.sh; its one
+-   # source file is built with freedreno's drm layer, src/freedreno/drm).
++   # source file is built with freedreno's drm layer, src/freedreno/drm, or, without freedreno,
++   # with panfrost's, src/panfrost/lib/kmod), and so do panfrost's, to the Mali's.
+ diff --git a/src/freedreno/vulkan/meson.build b/src/freedreno/vulkan/meson.build
+ index d0a38c9..4f68424 100644
+ --- a/src/freedreno/vulkan/meson.build
