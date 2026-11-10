@@ -424,6 +424,11 @@ function average(xs) {
 	return ok.length === 0 ? null : ok.reduce((a, b) => a + b, 0) / ok.length;
 }
 
+function highest(...xs) {
+	const ok = xs.filter((x) => Number.isFinite(x));
+	return ok.length === 0 ? null : Math.max(...ok);
+}
+
 function firstLast(xs) {
 	return xs.length === 0 ? { first: null, last: null } : { first: xs[0], last: xs[xs.length - 1] };
 }
@@ -506,6 +511,23 @@ function analyze(log) {
 	const cameraOn = events.filter((e) => e.kind === 'camera-on').length;
 	const cameraOff = events.filter((e) => e.kind === 'camera-off').length;
 
+	/* the fps lines that arrived while the display was off, by line order: the frame thread still running */
+	const displayEvents = events.filter((e) => e.kind === 'display').sort((a, b) => a.lineNo - b.lineNo);
+	let displayIsOn = true;
+	let displayEvent = 0;
+	const fpsWhileOff = [];
+	for (const g of gpus) {
+		while (displayEvent < displayEvents.length && displayEvents[displayEvent].lineNo < g.lineNo) {
+			displayIsOn = displayEvents[displayEvent].on;
+			displayEvent++;
+		}
+		if (!displayIsOn) {
+			fpsWhileOff.push(g);
+		}
+	}
+	const fpsOffCount = fpsWhileOff.length;
+	const fpsOffMhz = average(fpsWhileOff.filter((g) => !g.none && g.mhz > 0).map((g) => g.mhz));
+
 	/* the CPU governor: how often the M3s sat at or near their ceiling */
 	const bigMhz = cpus.map((c) => c.bigMhz).filter(Number.isFinite);
 	const bigHigh = bigMhz.filter((m) => m >= 1700).length;
@@ -534,9 +556,12 @@ function analyze(log) {
 	const tmuBig = tmuLines.map((x) => x.zones.big).filter(Number.isFinite);
 	const tmuIsp = tmuLines.map((x) => x.zones.isp).filter(Number.isFinite);
 	const tmuG3d = tmuLines.map((x) => x.zones.g3d).filter(Number.isFinite);
+	const tmuLittle = tmuLines.map((x) => x.zones.little).filter(Number.isFinite);
 	const maxTmuBig = tmuBig.length ? Math.max(...tmuBig) : null;
+	const maxTmuLittle = tmuLittle.length ? Math.max(...tmuLittle) : null;
 	const maxIsp = tmuIsp.length ? Math.max(...tmuIsp) : null;
 	const maxTmuG3d = tmuG3d.length ? Math.max(...tmuG3d) : null;
+	const maxLittle = highest(maxLitTemp, maxTmuLittle);
 
 	/* --- the findings --- */
 
@@ -668,6 +693,12 @@ function analyze(log) {
 				`${displayOff} display-off event(s), no \`s6e3ha8: panel_sleep:\` line. Without panel_sleep=1 the S6E3HA8 keeps scanning, and DSIM/DECON stay up: the phone is still warm with a dark screen (kernel docs_screen-off-power.md).`);
 		}
 	}
+	if (fpsOffCount >= 10) {
+		add('warn', 'Frames are still presented with the screen off',
+			`${fpsOffCount} fps line(s) came after the display-off event` +
+			(fpsOffMhz != null ? `, GPU ${Math.round(fpsOffMhz)} MHz on average` : '') +
+			'. panel_sleep puts the panel to sleep, but the DECON/DSIM clocks are not turned off (kernel docs_screen-off-power.md), so the frame thread and the display pipeline can keep running. This is not an app to close; it needs the display clock-off part of the CPU_SUSPEND work.');
+	}
 
 	if (bigMhz.length > 0) {
 		const sustained = bigMhz.length >= 5 && bigHighPct >= 50;
@@ -684,14 +715,14 @@ function analyze(log) {
 		}
 	}
 
-	if (maxLitTemp != null && maxLitTemp >= 76 && (maxCpuTemp == null || maxLitTemp > maxCpuTemp + 5)) {
+	if (maxLittle != null && maxLittle >= 76 && (maxCpuTemp == null || maxLittle > maxCpuTemp + 5)) {
 		add('warn', 'The A55 cluster is hot',
-			`${formatC(maxLitTemp)}; Android cools LITTLE from 76 °C. With the screen off, sleep_cores=1 only takes the M3s; sleep_cores=2 also takes the A55s. Prove the wake before keeping it.`);
+			`${formatC(maxLittle)}; Android cools LITTLE from 76 °C. With the screen off, sleep_cores=1 only takes the M3s; sleep_cores=2 also takes the A55s. Prove the wake before keeping it.`);
 	}
-	if (coreOff > 0 && maxCpuTemp != null && maxCpuTemp < 70 && maxLitTemp != null && maxLitTemp < 70 &&
+	if (coreOff > 0 && maxCpuTemp != null && maxCpuTemp < 70 && maxLittle != null && maxLittle < 70 &&
 	    (maxG3d == null || maxG3d < 85) && (maxIsp == null || maxIsp < 91)) {
 		add('info', 'The CPU and ISP zones are cool with the M3s off',
-			`big ${formatC(maxCpuTemp)}, little ${formatC(maxLitTemp)}, G3D ${formatC(maxG3d)}, ISP ${formatC(maxIsp)}; if the mainboard is still hot, the heat is outside these zones: the PMIC, the radios, the display pipeline or the SoC uncore.`);
+			`big ${formatC(maxCpuTemp)}, little ${formatC(maxLittle)}, G3D ${formatC(maxG3d)}, ISP ${formatC(maxIsp)}; if the mainboard is still hot, the heat is outside these zones: the PMIC, the radios, the display pipeline or the SoC uncore.`);
 	}
 
 	if (gpuSamples.length > 0) {
@@ -715,7 +746,11 @@ function analyze(log) {
 	}
 	if (gpuSamples.length === 0 && gpus.length > 0) {
 		add('info', 'The GPU was not running in this log',
-			`${gpus.length} fps line(s), all "gpu: none". The display still scanned; the GPU's heat is not part of this run.`);
+			`${gpus.length} fps line(s), all "gpu: none". ` +
+			(displayOff > 0 && fpsOffCount > 0
+				? `${fpsOffCount} of them came while the display was off: the frame thread/display pipeline still ran; `
+				: 'The display still scanned; ') +
+			`the GPU's heat is not part of this run.`);
 	} else if (gpus.length === 0 && maliBusy.length > 0) {
 		add('info', 'The GPU busy lines have no clock or temperature',
 			'`fps_log=1` adds the GPU\'s MHz, busy share and G3D sensor once a second; `mali: GPU busy` alone is a 5 s window.');
@@ -741,14 +776,17 @@ function analyze(log) {
 	}
 
 	/* the heat, by the evidence the log carries: CPU, GPU, charger/battery, panel */
-	const heatCpu = maxCpuTemp ?? maxTmuBig;
-	const heatGpu = maxG3d ?? maxTmuG3d;
+	const heatCpu = highest(maxCpuTemp, maxTmuBig);
+	const heatGpu = highest(maxG3d, maxTmuG3d);
 	const heatSources = [];
 	if (heatCpu != null && heatCpu >= 80) {
 		heatSources.push(`CPU: big zone ${formatC(heatCpu)}` +
 			(bigMhz.length >= 5 && bigHighPct != null ? `, M3s >= 1.7 GHz in ${bigHighPct}% of samples` : ''));
 	} else if (bigMhz.length >= 5 && heatCpu != null && heatCpu >= 78 && bigHighPct != null && bigHighPct >= 50) {
 		heatSources.push(`CPU: big zone ${formatC(heatCpu)}, M3s >= 1.7 GHz in ${bigHighPct}% of samples`);
+	}
+	if (maxLittle != null && maxLittle >= 76 && (heatCpu == null || maxLittle > heatCpu)) {
+		heatSources.push(`A55: little zone ${formatC(maxLittle)}`);
 	}
 	if (heatGpu != null && heatGpu >= 85) {
 		heatSources.push(`GPU: G3D ${formatC(heatGpu)}` + (gpuFloorPct != null && gpuFloorPct >= 50 ? `, clock floor ${gpuFloorPct}% of samples` : ''));
@@ -758,11 +796,18 @@ function analyze(log) {
 	if (maxIsp != null && maxIsp >= 91 && (maxCpuTemp == null || maxIsp >= maxCpuTemp) && (maxG3d == null || maxIsp >= maxG3d)) {
 		heatSources.push(`ISP/camera: ${formatC(maxIsp)} (the hottest TMU zone)`);
 	}
+	if (fpsOffCount >= 10) {
+		heatSources.push('display pipeline: frames still presented with the panel asleep');
+	}
 	if (charging.length > 0 && maxTemp != null && maxTemp >= 42) {
 		heatSources.push(`charger/battery: ${formatC(maxTemp)} while charging`);
 	}
 	if (displayOff > 0 && panelSleep === 0) {
 		heatSources.push('panel: still scanning while the screen was off');
+	}
+	if (heatSources.length === 0 && tmuLines.length > 0) {
+		const hottest = tmuLines.reduce((best, x) => (x.hottestC > best.hottestC ? x : best));
+		heatSources.push(`${hottest.hottest} zone: ${formatC(hottest.hottestC)} (the hottest TMU zone, below its cooling point)`);
 	}
 	if (heatSources.length === 0) {
 		heatSources.push('none above these thresholds: the log does not name the source; check radios, camera, sensor hub and the charger next');
@@ -792,8 +837,13 @@ function analyze(log) {
 	if (displayOff > 0 && panelSleep === 0) {
 		next.push('Add `panel_sleep=1` and repeat the screen-off run; check `s6e3ha8: panel_sleep:` lines and the picture when it wakes.');
 	}
-	if (displayOff > 0) {
-		next.push('If the phone is hot with the charger out too, the charger is not the source: run the screen-off log unplugged and read `cpufreq_gov` big/lit MHz/load, `fps:` GPU MHz/busy and `tmu:` zones; then try `panel_sleep=1` and `sleep_cores=1`.');
+	if (displayOff > 0 && panelSleep > 0 && coreOff === 0) {
+		next.push('The display went off and panel_sleep ran, but no core was taken off: check that `sleep_cores=1` was in the boot arguments and that the display-off request reached `GenericARMPE`. Without the `taken off` line the M3s were never parked.');
+	} else if (displayOff > 0 && panelSleep > 0 && coreOff > 0) {
+		next.push('panel_sleep and sleep_cores both ran: read the `tmu:` zones and the `cpufreq_gov` little MHz/load. If little is hot, test `sleep_cores=2` (after proving the wake); if the four zones are cool and the board center is hot, the remainder is the display pipeline/uncore/PMIC.');
+	}
+	if (fpsOffCount >= 10) {
+		next.push('The `fps:` lines continue after the display-off event: the frame thread/display pipeline is still presenting with the panel asleep. A governor or `panel_sleep` change will not stop it; the DECON/DSIM clock-off belongs with the `CPU_SUSPEND` work.');
 	}
 	if (charging.length > 0 && maxTemp != null && maxTemp >= 42) {
 		next.push('Repeat the same workload with the charger out and with it in; if the battery temperature falls only when unplugged, the charger is part of the heat and the fix is the source/current, not the CPU law.');
@@ -807,15 +857,15 @@ function analyze(log) {
 		currentDrop, minCurrent, maxCurrent, maxTemp, minTemp,
 		firstLimit, lastLimit, peakLimit, maxLimitDrop, limitDrops,
 		firstFast, lastFast, fastMa: firstFast ? firstFast.ma : null, chgDtls, chginValid,
-		displayOff, displayOn, panelSleep, coreOff, coreOn, cameraOn, cameraOff,
-		bigHigh, bigHighPct, bigMhz, maxCpuTemp, maxLitTemp,
+		displayOff, displayOn, panelSleep, coreOff, coreOn, cameraOn, cameraOff, fpsOffCount,
+		bigHigh, bigHighPct, bigMhz, maxCpuTemp, maxLitTemp, maxTmuLittle,
 		gpuSamples, gpuMaxMhz, gpuAvgBusy, gpuFloorSamples, gpuFloorPct, maxG3d, maliBusyAvg,
 		maxTmuBig, maxTmuG3d, maxIsp, coolBig, coolLit, cap455, cap260, heatSources,
 		heat: {
-			maxBigC: maxCpuTemp ?? maxTmuBig,
-			maxLitC: maxLitTemp,
+			maxBigC: heatCpu,
+			maxLitC: maxLittle,
 			bigHighPct,
-			maxG3dC: maxG3d ?? maxTmuG3d,
+			maxG3dC: heatGpu,
 			gpuAvgBusyPct: gpuAvgBusy,
 			gpuMaxMhz,
 			gpuFloorPct,
@@ -830,6 +880,7 @@ function analyze(log) {
 			panelSleep,
 			coreOff,
 			coreOn,
+			fpsOff: fpsOffCount,
 			coolBig,
 			coolLit,
 			cap455,
@@ -886,7 +937,7 @@ function report(input, log, a) {
 		p('CPU and screen');
 		p('--------------');
 		p(`  cpufreq_gov lines: ${a.cpus.length}; big at or above 1.7 GHz: ${a.bigHigh}/${a.bigMhz.length}; hottest big: ${formatC(a.maxCpuTemp)}`);
-		p(`  display: ${a.displayOff} off / ${a.displayOn} on; panel_sleep: ${a.panelSleep}; cores off/on: ${a.coreOff}/${a.coreOn}; camera stream: ${a.cameraOn} start(s), ${a.cameraOff} stop(s)`);
+		p(`  display: ${a.displayOff} off / ${a.displayOn} on; panel_sleep: ${a.panelSleep}; cores off/on: ${a.coreOff}/${a.coreOn}; fps while off: ${a.fpsOffCount}; camera stream: ${a.cameraOn} start(s), ${a.cameraOff} stop(s)`);
 		p();
 	}
 
@@ -912,7 +963,7 @@ function report(input, log, a) {
 	if (a.heat.gpuSamples > 0) {
 		p(`  GPU: ${a.heat.gpuMaxMhz} MHz, ${a.heat.gpuAvgBusyPct == null ? '?' : Math.round(a.heat.gpuAvgBusyPct)}% busy, G3D ${formatC(a.heat.maxG3dC)}; clock floor ${a.heat.gpuFloorPct}% of samples`);
 	} else if (a.gpus.length > 0) {
-		p(`  GPU: ${a.gpus.length} fps line(s), all "gpu: none"; the display still scanned`);
+		p(`  GPU: ${a.gpus.length} fps line(s), all "gpu: none"; ` + (a.fpsOffCount > 0 ? `${a.fpsOffCount} while the display was off` : 'the display still scanned'));
 	} else {
 		p('  GPU: no fps line (add fps_log=1)');
 	}
@@ -1029,6 +1080,7 @@ function selfTest() {
 		'max77705: every 5 minutes: 53.00%, 4150 mV, 470 mA, 45.0 C (ADC 1234), a battery, charging, 1800 of 2967 mAh (full 2800), 300 cycles',
 		'max77705: charger every 5 minutes: CNFG_00 mode 0x1 WDTEN 1; CHGIN_DTLS 3; CHG_DTLS 0x2 BAT_DTLS 0; BYP_DTLS 0x0; fast charge 2100 mA; input limit code 0x13 (CNFG_09)',
 		'cpufreq_gov: 10 s: lit 1248 MHz load 31% (avg 22%, 2 online, 1794 max, measured 1251) | big 1794 MHz load 64% (avg 60%, 4 online, 1794 max, measured 1794) | temp big 70 lit 65 C | 4 changes | boost: 0 touch, 0 frames, 0 raised, off',
+		'GenericARMPE: the display off (iOS\'s power request)',
 		'fps: 0 refreshes missed while moving, the longest gap 0.0 ms; zc: 8 in place, 0 copied, 0 into the one shown; gpu: 12% busy, 900 us a frame shown, 60 jobs (15 us each, 2 us queued), 572 MHz (mali_gov), 1 switches, G3D 78 C',
 		'fps: 0 refreshes missed while moving, the longest gap 0.0 ms; zc: 8 in place, 0 copied, 0 into the one shown; gpu: 8% busy, 700 us a frame shown, 48 jobs (14 us each, 1 us queued), 455 MHz (mali_gov), 1 switches, G3D 82 C',
 		'fps: 1 refreshes missed while moving, the longest gap 16.7 ms; zc: 8 in place, 0 copied, 0 into the one shown; gpu: 40% busy, 2500 us a frame shown, 120 jobs (20 us each, 5 us queued), 572 MHz (mali_gov), 3 switches, G3D 86 C',
@@ -1070,6 +1122,9 @@ function selfTest() {
 	}
 	if (parsed.gpus.length !== 3) {
 		errors.push(`fps lines: ${parsed.gpus.length}, wanted 3`);
+	}
+	if (a.displayOff !== 1 || a.fpsOffCount !== 3) {
+		errors.push(`fps while the display was off: ${a.fpsOffCount}, wanted 3 (display-off events ${a.displayOff})`);
 	}
 	if (parsed.maliBusy.length !== 1) {
 		errors.push(`mali: GPU busy lines: ${parsed.maliBusy.length}, wanted 1`);

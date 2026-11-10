@@ -151,42 +151,51 @@ M3s as the whole story. `sleep_cores=1` only takes the M3s off; the A55s, the GP
 stay up. The center of the board is the SoC/PMIC area; the charger is at the bottom, so the charger is not
 the hot spot either.
 
-With the screen off and every app closed, the heat has to come from the platform's screen-off path:
+The first thing to fix is the mental model: on this port **screen off is not sleep**. `docs_screen-off-power.md`
+says `IOPMrootDomain` refuses sleep (`gSleepDisabledFlag = 1`), the cores idle in WFI only, and nothing asks
+for `CPU_SUSPEND` or a cluster power-down, so every powered cluster keeps its supply and leaks. `panel_sleep=1`
+sends display-off and sleep-in, but the panel supplies stay on and the DECON/DSIM clocks are not turned off;
+`sleep_cores=1` takes only the four M3s. The phone is an awake phone with a dark screen, not a phone in standby.
 
-- the panel may still be scanning, with DSIM/DECON up, unless `panel_sleep=1` was in the boot arguments;
-- there is no system sleep and no `CPU_SUSPEND`; the cores only WFI, so every powered cluster leaks, and
-  Wi-Fi/BT, the sensor hub and the UFS service keep running;
-- a background process can still keep the A55s at a high rate; the `cpufreq_gov` lines say which cluster
-  and how much;
-- the GPU, the camera ISP or the front camera can be busy with the screen off; `fps:`, `mali: GPU busy`
-  and `exynos_camera: STREAM ON/OFF` are the evidence;
-- the PMIC and the SoC's uncore sit in the center of the board; even unplugged, a high SoC load makes them
-  hot.
+Two things are still on even when iOS says the connections are off:
 
-The tests, all screen off, unplugged, one change at a time:
+- the installer appends `shub=6 bt=7` to every S9 boot (`s9-installer.yml`), and `configs/starlte.config`
+  defaults Wi-Fi to `wifi_pcie=6 brcmfmac=8`. `BLUETOOTH.md` says the chip stays powered from `bt=7` and
+  that turning the Settings switch off has not been tried; the iOS switches do not run the kernel's
+  power-down path. The log's `brcmfmac`/`bt` lines say whether the radios really came up.
+- a background process, or a reader of `/dev/hakios-camera`, can keep the A55s or the ISP busy; the
+  `cpufreq_gov` load and `exynos_camera: STREAM ON` say so.
 
-1. **Baseline log with `panel_sleep=1 sleep_cores=1`.** 10-15 minutes. Confirm the `s6e3ha8: panel_sleep:`
-   lines and the `GenericARMPE: sleep_cores: cpu N taken off` lines; then read `cpufreq_gov` big/lit MHz and
-   load, `tmu:` zones and `fps:`. If the M3s are off and big is cool but little is hot, the A55s are next.
-2. **`sleep_cores=2`.** Also takes the A55s off after the display goes off; prove the wake before keeping it.
-   If the center cools only here, the A55s (and their background load) were the source.
-3. **Wi-Fi/Bluetooth off.** If the center cools, the radios are part of it.
-4. **Camera/ISP.** Check `exynos_camera: STREAM ON`; if the ISP zone is the hottest, close Camera.app and any
-   reader; `cam_s9=7` is lazy but a reader still starts it.
-5. **`mali_gov_frame=0`** only if `fps:` shows the GPU above its floor with the screen off.
+So the heat has to be one of these blocks, and one log tells which:
 
-All with `tmu=3 fps_log=1 max77705_diag=1 max77705_fg_s=30` (add `max77705_wdt=1` when charging). Capture the
-unplugged baseline without the PC cable attached: run it for 10-15 minutes, then connect the phone to the PC
-and type `log` at the console (it reprints the kernel log from its start), or set `time_limit=900` and read
-pstore in TWRP. If the PC cable is attached during the run, the PC becomes the charger and the baseline is
-lost. The log's `cpufreq_gov` big/lit MHz and load, the `fps:` GPU MHz/busy/G3D, the `tmu:` zones
-(BIG/LITTLE/G3D/ISP) and the `GenericARMPE: the display off` / `s6e3ha8: panel_sleep:` lines name the block
-that is hot.
+| What the log shows | Block | One next step |
+|---|---|---|
+| `lit` MHz near its ceiling, high `lit` load, `little` hottest | A55s and background work | `sleep_cores=2` after the wake is proven, or `cpufreq_gov_lit_max=1053000` for a test |
+| `brcmfmac`/`bt` lines show the station or chip up, though iOS says off | Wi-Fi/BT still powered | one run `bt=0 wifi_pcie=0` (a run argument overrides the installer's `bt=7`); leave them off if you do not need them |
+| `exynos_camera: STREAM ON`, or `isp` hottest | camera/ISP | close Camera.app and every reader; `cam_s9=7` is lazy, a reader still starts it |
+| `fps:` lines keep coming after the display-off event | frame thread/display pipeline | no boot-arg fix: DECON/DSIM clock-off belongs with `CPU_SUSPEND` |
+| `g3d` hottest, or GPU above its floor | GPU | `mali_gov_frame=0` |
+| big/little/G3D/ISP all under their cooling points, center still hot | SoC uncore/PMIC | `CPU_SUSPEND`/cluster power-down, not another governor switch |
+| no `GenericARMPE: the display off`, or no `taken off` line | the switch never ran | check the boot args and the display-off event first |
 
-If the log shows big/little/G3D/ISP all under their cooling points with the M3s off and the A55s off, yet
-the center is still very hot, the remaining heat is the SoC uncore, the display pipeline or the PMIC. The
-boot-arg fixes are then exhausted; the next step is the kernel's `CPU_SUSPEND`/cluster power-down work
-(below, "What is not implemented"), not another governor switch.
+Capture the failing state once: `panel_sleep=1 sleep_cores=1 tmu=3 fps_log=1 max77705_diag=1
+max77705_fg_s=30`, screen off, unplugged, 10-15 minutes. Then plug the phone into the PC and type `log` at the
+console, or set `time_limit=900` and read pstore in TWRP. If the PC cable is attached during the run, the PC
+becomes the charger and the baseline is lost. That one log picks a row; only then make the one change in that
+row. Do not try `sleep_cores=2`, radios off and the camera in separate blind runs: the log already says which
+of them matters. The sensor hub is appended too (`shub=6`); `shub=0` turns it off for a test, but iOS may
+retry its services, which adds CPU load, so judge that run by the `tmu:` zones, not by the case temperature.
+
+The console is the phone's USB-C port as a CDC-ACM serial device (1209:0001), not the iOS Console app, not
+Xcode, not SSH. On Windows it is a `USB Serial Device (COMx)`; open it in PuTTY or Tera Term at 115200 8N1
+and type `log` (README.md, "USB: the whole log and a console over the cable"). The cable also charges the
+phone from the PC, so run the unplugged period first, then plug in and send `log`: it reprints the kernel log
+from its first line.
+
+If big, little, G3D and ISP are all under their cooling points with the M3s and A55s off, yet the center is
+still very hot, the remaining heat is the SoC uncore, the display pipeline or the PMIC. The boot-arg fixes are
+then exhausted; the next step is the kernel's `CPU_SUSPEND`/cluster power-down work (below, "What is not
+implemented"), not another governor switch.
 
 ## The log that names the source
 

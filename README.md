@@ -994,6 +994,12 @@ while :; do [ -e /dev/ttyACM0 ] && stty -F /dev/ttyACM0 raw -echo && cat /dev/tt
 picocom -q /dev/ttyACM0                # the console: type help and Enter (the phone echoes the line, "usb> help")
 ```
 
+On Windows the same CDC-ACM function is a `USB Serial Device (COMx)` in Device Manager (the in-box `usbser.sys`
+for 1209:0001); open that COM port in PuTTY or Tera Term at 115200 8N1, no flow control (`GetPortNames()` in a
+PowerShell console lists it if PuTTY is not installed). The log streams as soon as the port opens, `log` reprints
+it from its first line, and `help` lists the console's commands. The cable also charges the phone from the PC, so
+for an unplugged run: let it run first, then plug in and send `log`.
+
 The console's commands: `help`, `stat` (the link's counters), `uptime`, `sysctl NAME`, `log` (the kernel's log again from
 its start), `shot [N]` (the panel's picture, every Nth pixel, as a framed binary blob; the log is held back while it goes
 out), `return` (end the run: the loader restarts the phone into TWRP). It is the kernel's, not a shell.
