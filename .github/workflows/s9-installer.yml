@@ -31,7 +31,7 @@ on:
         description: The partition the iOS system image is written to
         default: SYSTEM
       boot_args:
-        description: Extra boot-arguments (for example mali=9, or abox=8 max98512=3)
+        description: "Extra boot-arguments (for example mali=9, or max77705_wdt=1 max77705_diag=1 max77705_fg_s=30 panel_sleep=1 sleep_cores=1 gov_policy=3; gov_policy=3 is the screen-on one; see docs/power-charging.md)"
         default: ""
       time_limit:
         description: A test run's seconds, after which the phone restarts into TWRP with the log (0, no limit)
@@ -296,10 +296,17 @@ jobs:
 
           1. Check the zip: sha256sum -c SHA256SUMS   (or compare with: shasum -a 256 scion-exynos9810-installer-format-userdata.zip)
           2. In TWRP, back up Boot, $PARTITION, EFS and USERDATA first and copy the backup off the phone.
-          3. Copy scion-exynos9810-installer-format-userdata.zip to the phone (adb push or microSD: adb sideload cannot take a zip over 2 GB) and flash it: Install > the zip > swipe.
-             Flash this zip as it is: do not unpack it, and keep "format-userdata" in its file name;
+          3. Get the zip onto the phone. It is over 2 GiB and reads itself while it formats USERDATA, so it
+             cannot be flashed from internal storage (/sdcard): formatting Data unmounts it. Use a microSD
+             card or a USB OTG drive, or put the zip in TWRP's RAM:
+               adb shell mount -o remount,size=3G /tmp
+               adb push scion-exynos9810-installer-format-userdata.zip /tmp/
+               adb shell twrp install /tmp/scion-exynos9810-installer-format-userdata.zip
+             (adb sideload does not work: TWRP's sideload host keeps the size in 32 bits.)
+          4. Flash scion-exynos9810-installer-format-userdata.zip (Install > the zip > swipe, or the twrp install
+             command above). Do not unpack it, and keep "format-userdata" in its file name;
              TWRP's update-binary refuses the zip without it.
-          4. Reboot > System. To leave Scion: five fingers held on the screen for 1.5 s (back to TWRP), or Vol Down + Power.
+          5. Reboot > System. To leave Scion: five fingers held on the screen for 1.5 s (back to TWRP), or Vol Down + Power.
           $([ "$TIME_LIMIT" = 0 ] || echo "   A test run: after $TIME_LIMIT s it restarts into TWRP by itself. Pull the log then (/sys/fs/pstore/pmsg-ramoops-0).")
           Android back: restore the Boot, $PARTITION and USERDATA backups in TWRP.
 

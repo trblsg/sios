@@ -326,7 +326,8 @@ poster_retry=2 backlight=2 brightness_bridge=1          SpringBoard's poster; iO
 ufs=3 system_apfs=ufs_SYSTEM                            the kernel's own UFS driver; iOS's system from SYSTEM
 ufs_write=1 var_hfs=ufs_USERDATA_data                   /private/var kept in USERDATA (a memory filesystem if it holds no HFS Plus)
 fb_dpp=1 fb_zc=1 rtc_pmic=1                             scaling by the DPP, zero-copy scan-out, the RTC's time
-cam_s9=7 cam=5                                          the front camera, for the Camera app
+fb_psr=300 gov_policy=2 gov_wake=1                      panel self-refresh, governor without parking, GPU wake on touch
+cam_s9=7 cam=5                                          the front camera on demand (Camera app; cam_s9_always=1 keeps it on)
 abox=8 max98512=3 cs47l93=6                             the speakers; the codec and its main microphone
 wifi_pcie=6 brcmfmac=8 brcmfmac_poll=1 brcmfmac_tcm_idx=1 wifi=1    Wi-Fi, joined from iOS's Settings
 ```
@@ -417,14 +418,30 @@ To use it:
 3. Check `SHA256SUMS`.
 4. In TWRP, back up Boot, SYSTEM, EFS and USERDATA first and copy the backup off the phone. **This installer
    erases Android's data in USERDATA** (apps, photos, accounts); that is what makes `/private/var` persistent.
-5. Flash `scion-exynos9810-installer-format-userdata.zip` from TWRP as it is. Keep `format-userdata` in its file
-   name: TWRP's update-binary refuses the zip without it.
-6. Reboot. Sileo appears on the home screen after about 30 seconds (the prefix is copied to `/var/jb`); see
+5. Get the zip onto the phone. It is over 2 GiB and reads itself while it formats USERDATA, so it cannot be
+   flashed from internal storage (`/sdcard`): formatting USERDATA unmounts it. Use a microSD card or a USB
+   OTG drive, or put the zip in TWRP's RAM:
+
+   ```sh
+   adb shell mount -o remount,size=3G /tmp
+   adb push scion-exynos9810-installer-format-userdata.zip /tmp/
+   adb shell twrp install /tmp/scion-exynos9810-installer-format-userdata.zip
+   ```
+
+   `adb sideload` does not work: TWRP's sideload host keeps the size in 32 bits, and the zip is over 2 GiB.
+6. Flash `scion-exynos9810-installer-format-userdata.zip` from TWRP as it is (or with the `twrp install`
+   command above). Keep `format-userdata` in its file name: TWRP's update-binary refuses the zip without it.
+7. Reboot. Sileo appears on the home screen after about 30 seconds (the prefix is copied to `/var/jb`); see
    [docs/IPA.md](docs/IPA.md) for `ipainstaller`.
 
 The run's inputs: the kernel and packaging refs, the partition, extra boot-arguments, the time limit, `tweaks`
 (default `true`, ElleKit and PreferenceLoader), and `userdata_blocks` (default `starlte=13615227`, in 4096-byte
-blocks; **it formats USERDATA**, so the size must match the phone). 13615227 blocks is the S9 64 GB's
+blocks; **it formats USERDATA**, so the size must match the phone). For the heat, drain and charging test, put
+`max77705_wdt=1 max77705_diag=1 max77705_fg_s=30 panel_sleep=1 sleep_cores=1 gov_policy=3` in the boot-arguments
+input; the first five do not cool a screen-on phone (`gov_policy=3` is the screen-on switch), and a charging log
+must not be captured over the PC USB cable.
+[docs/power-charging.md](docs/power-charging.md) says what each one does and the order to try them, and
+`tools/analyze-max77705-log.mjs` reads the log. 13615227 blocks is the S9 64 GB's
 55,767,969,792-byte USERDATA; for the S9+ or Note9 add their sizes (`star2lte=... crownlte=...`), or the installer
 refuses `-U` on those phones.
 
@@ -617,8 +634,55 @@ information, else 0-4095 on both axes), spread over the whole panel, which is wh
 
 `drivers/power/hakios.max77705.c` (`max77705=1`, a default; seen working on the phone, 1 November) reads the MAX77705's fuel gauge (0x36) and charger
 (0x69) on CMGP's HSI2C every 5 seconds, and hands the charge, voltage, current, capacity, cycles and charger state to
-iOS's power source. It never writes the chip. The temperature is the battery's thermistor (channel 4 of CMGP's ADC,
-through the phone's own table), as Android reads it. Touch and battery share `drivers/core/hakios.exynos_hsi2c.c`.
+iOS's power source. It writes the chip only with `max77705_wdt=1` (the charger watchdog's clear, off by default;
+[Heat, battery and charging](docs/power-charging.md)). The charger's input and fast-charge limits (`CNFG_09`,
+`CNFG_02`) are never written: Android's `sec_battery` sets them on every cable attach, and HakiOS has no equivalent,
+so they stay at what S-Boot or the charger left. `max77705_diag=1` reads them, `max77705_fg_s=30` prints the gauge
+every 30 s, and `tools/analyze-max77705-log.mjs` turns the log into the current and limit trend. The temperature is
+the battery's thermistor (channel 4 of CMGP's ADC, through the phone's own table), as Android reads it. Touch and
+battery share `drivers/core/hakios.exynos_hsi2c.c`.
+
+## Heat, battery and charging
+
+The 5-9 November 2026 fixes for the phone's heat, drain and charging are in the kernel, but the three new switches
+are off by default: `max77705_wdt=1` (charger watchdog; without it the charger stopped within five minutes of a boot
+on USB), `panel_sleep=1` (panel sleep when the screen goes off) and `sleep_cores=1` (the four M3s through PSCI
+CPU_OFF ten seconds after screen off). `gov_policy=3` is the scion governor with M3 parking; the S9's default is
+`gov_policy=2`, the same law without parking. The front camera no longer streams at boot; `cam_s9=7` starts at the
+first reader (an image older than 5 November still streams at 30 frames a second, and is hot for it).
+
+None of the three new switches cools a phone whose screen is on. `max77705_wdt` only feeds the charger's watchdog,
+`max77705_diag` and `max77705_fg_s` only read the chip, and `panel_sleep`/`sleep_cores` act only after iOS turns the
+display off. A run with those five and no `gov_policy=3` therefore changed nothing about the screen-on CPU law.
+For heat with the screen on, use a 5 November or later image, `gov_policy=3`, Wi-Fi/Bluetooth off, and look at the
+`cpufreq_gov` lines (rate, load and `temp big ... lit ... C`) at the same workload.
+
+The 0.88 A to 0.47 A report is about 900 mA to 500 mA. A plain USB 2.0 port or cable is 475 mA input / 550 mA charge
+in the S9's device tree, and the `CNFG_09` code for 500 mA is `0x13`; 900 mA is `0x23`. A 500 mA input at 5 V is
+2.5 W, which a screen-on S9 can use up, so the battery gets little while `CHG_DTLS` still says charging. If
+`CNFG_09` stays at `0x13`, the limit was there from boot; if it falls in 100 mA steps, the source/cable/port is
+sagging (AICL-style). HakiOS never writes either limit, so a hotplug does not re-apply the charger type.
+[docs/power-charging.md](docs/power-charging.md) has the decode table, the four cases, and how to capture a
+wall-charging log without charging from the PC's USB port.
+
+To test them, run the installer workflow with, in `boot_args`:
+
+```
+max77705_wdt=1 max77705_diag=1 max77705_fg_s=30 panel_sleep=1 sleep_cores=1 gov_policy=3
+```
+
+The diagnostics are read-only. Start with the charger line alone, then add `panel_sleep=1`, then `sleep_cores=1`:
+the last two had not been run on a phone when their commits were made, and `sleep_cores=1` must prove that the
+screen comes back before it is kept. There is still no system sleep (CPU_SUSPEND/C2 is not done), so the screen-off
+load is not Android's. For a charging run, do not capture the log over the PC USB cable (that makes the PC the
+charger): charge from the wall first, then connect the phone to the PC and send `log` at the console, or use
+`time_limit` and read pstore in TWRP. `tools/analyze-max77705-log.mjs` reads the saved log:
+
+```
+node tools/analyze-max77705-log.mjs s9-charge.log
+```
+
+[docs/power-charging.md](docs/power-charging.md) has the commits, the log lines and the test order.
 
 ## Brightness
 
@@ -757,7 +821,9 @@ one frame through CSIS1's VC0 DMA into a buffer below 4 GB (0xD8000000) and logs
 does that and then answers the USB console's `camshot [N]` (`tools/usb-shot.py --cam -o cam.png`): one frame each time,
 debayered on the processor and sent as a picture, or the CSIS's and the WDMA's registers when it fails; `cam_s9=7`
 streams the sensor into a ring of four frames, `/dev/hakios-camera`, which the stock Camera app's preview shows at 30
-frames a second with `cam=5` (run cn3-7, 3 November; kernel PRs 159, 162). Each step seen on the phone (camshot run C6,
+frames a second with `cam=5` (run cn3-7, 3 November; kernel PRs 159, 162). Since 5 November the stream starts at the
+first reader and stops at the last close or 2 s without one; `cam_s9_always=1` keeps it on from boot, as it was and
+as it should not be left. Each step seen on the phone (camshot run C6,
 2 November). The rear cameras are not started. [CAMERA.md](CAMERA.md) has the hardware of both cameras, the steps'
 expected lines and how iOS's camera stack is fed.
 
@@ -820,7 +886,8 @@ S-Boot may have armed), `tmu=2` publishes `sysctl kern.hakios.temp.*` (`big_mc`,
 reads `tmu_stop` (110, five under Android's hot trip) or the battery `tmu_batt_stop` (60) three times in a row: a loud
 "TOO HOT" in the log, then back to the loader, which stops every core and restarts into TWRP with the log kept. With
 `tmu_off=1` and no charger it powers the phone off instead (PS_HOLD low, as Samsung's power-off does; the log is lost).
-Nothing slows anything down: the stop is the whole protection. If S-Boot leaves the TMU stopped, `tmu_enable=1` starts
+The TMU itself only reads and stops; the CPU governor uses its temperatures for the ceilings in "CPU clocks" below.
+If S-Boot leaves the TMU stopped, `tmu_enable=1` starts
 it the way Android does, but never arms its hardware trip. Running on the phone since 1 November (the zones read); its
 stop at 110 C has not been reached there.
 
