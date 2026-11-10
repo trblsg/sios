@@ -437,11 +437,12 @@ To use it:
 The run's inputs: the kernel and packaging refs, the partition, extra boot-arguments, the time limit, `tweaks`
 (default `true`, ElleKit and PreferenceLoader), and `userdata_blocks` (default `starlte=13615227`, in 4096-byte
 blocks; **it formats USERDATA**, so the size must match the phone). For the heat, drain and charging test, put
-`max77705_wdt=1 max77705_diag=1 max77705_fg_s=30 panel_sleep=1 sleep_cores=1 gov_policy=3` in the boot-arguments
-input; the first five do not cool a screen-on phone (`gov_policy=3` is the screen-on switch), and a charging log
-must not be captured over the PC USB cable.
-[docs/power-charging.md](docs/power-charging.md) says what each one does and the order to try them, and
-`tools/analyze-max77705-log.mjs` reads the log. 13615227 blocks is the S9 64 GB's
+`max77705_wdt=1 max77705_diag=1 max77705_fg_s=30 tmu=3 fps_log=1` in the boot-arguments input; for screen-on
+heat add `gov_policy=2 cpufreq_gov_big_max=1469000 mali_gov_frame=455` (the defaults are four M3s to 1794 MHz
+and a 572 MHz GPU floor while frames come). `panel_sleep=1` and `sleep_cores=1` only act after the screen is off,
+`gov_policy=3` can be hotter, and a charging log must not be captured over the PC USB cable.
+[docs/heat.md](docs/heat.md) has the heat analysis and test order; [docs/power-charging.md](docs/power-charging.md)
+says what each charger switch does, and `tools/analyze-max77705-log.mjs` reads the log. 13615227 blocks is the S9 64 GB's
 55,767,969,792-byte USERDATA; for the S9+ or Note9 add their sizes (`star2lte=... crownlte=...`), or the installer
 refuses `-U` on those phones.
 
@@ -647,19 +648,24 @@ battery share `drivers/core/hakios.exynos_hsi2c.c`.
 The 5-9 November 2026 fixes for the phone's heat, drain and charging are in the kernel, but the three new switches
 are off by default: `max77705_wdt=1` (charger watchdog; without it the charger stopped within five minutes of a boot
 on USB), `panel_sleep=1` (panel sleep when the screen goes off) and `sleep_cores=1` (the four M3s through PSCI
-CPU_OFF ten seconds after screen off). `gov_policy=3` is the scion governor with M3 parking; the S9's default is
-`gov_policy=2`, the same law without parking. The front camera no longer streams at boot; `cam_s9=7` starts at the
-first reader (an image older than 5 November still streams at 30 frames a second, and is hot for it).
+CPU_OFF ten seconds after screen off). `gov_policy=3` is the scion governor with M3 parking, but it is **not a heat
+fix**: it parks only under 70 °C, hands all four back to the scheduler as soon as a thermal ceiling is active (`c->thermal != 0`),
+overrides `cpufreq_gov_big_max`, and when it parks two it allows 2314 MHz. The S9's default `gov_policy=2` is the
+one to keep for heat. The front camera no longer streams at boot; `cam_s9=7` starts at the first reader (an image
+older than 5 November still streams at 30 frames a second, and is hot for it).
 
 None of the three new switches cools a phone whose screen is on. `max77705_wdt` only feeds the charger's watchdog,
 `max77705_diag` and `max77705_fg_s` only read the chip, and `panel_sleep`/`sleep_cores` act only after iOS turns the
-display off. A run with those five and no `gov_policy=3` therefore changed nothing about the screen-on CPU law.
-For heat with the screen on, use a 5 November or later image, `gov_policy=3`, Wi-Fi/Bluetooth off, and look at the
-`cpufreq_gov` lines (rate, load and `temp big ... lit ... C`) at the same workload.
+display off. A run with those five and no CPU/GPU change therefore changed nothing about the screen-on heat.
+For heat with the screen on, use a 5 November or later image, `gov_policy=2 cpufreq_gov_big_max=1469000` (then
+`1261000`) and `mali_gov_frame=455` (then `0`), Wi-Fi/Bluetooth off, and read the `cpufreq_gov` lines (rate, load
+and `temp big ... lit ... C`) and the `fps:` lines (GPU MHz, busy, G3D) at the same workload.
+[docs/heat.md](docs/heat.md) has the control law, the measurements, the screen-off gap and the thresholds.
 
-The 0.88 A to 0.47 A report is about 900 mA to 500 mA. A plain USB 2.0 port or cable is 475 mA input / 550 mA charge
-in the S9's device tree, and the `CNFG_09` code for 500 mA is `0x13`; 900 mA is `0x23`. A 500 mA input at 5 V is
-2.5 W, which a screen-on S9 can use up, so the battery gets little while `CHG_DTLS` still says charging. If
+The 0.88 A to 0.47 A report is about 900 mA to 500 mA at the hub's port (input current at about 5 V, not the
+battery gauge). A plain USB 2.0 port or cable is 475 mA input / 550 mA charge in the S9's device tree, and the
+`CNFG_09` code for 500 mA is `0x13`; 900 mA is `0x23`. A 500 mA input at 5 V is 2.5 W, which a screen-on S9 can use
+up, so the battery gets little while `CHG_DTLS` still says charging. If
 `CNFG_09` stays at `0x13`, the limit was there from boot; if it falls in 100 mA steps, the source/cable/port is
 sagging (AICL-style). HakiOS never writes either limit, so a hotplug does not re-apply the charger type.
 [docs/power-charging.md](docs/power-charging.md) has the decode table, the four cases, and how to capture a
@@ -668,21 +674,23 @@ wall-charging log without charging from the PC's USB port.
 To test them, run the installer workflow with, in `boot_args`:
 
 ```
-max77705_wdt=1 max77705_diag=1 max77705_fg_s=30 panel_sleep=1 sleep_cores=1 gov_policy=3
+max77705_wdt=1 max77705_diag=1 max77705_fg_s=30 tmu=3 fps_log=1
 ```
 
-The diagnostics are read-only. Start with the charger line alone, then add `panel_sleep=1`, then `sleep_cores=1`:
-the last two had not been run on a phone when their commits were made, and `sleep_cores=1` must prove that the
-screen comes back before it is kept. There is still no system sleep (CPU_SUSPEND/C2 is not done), so the screen-off
-load is not Android's. For a charging run, do not capture the log over the PC USB cable (that makes the PC the
-charger): charge from the wall first, then connect the phone to the PC and send `log` at the console, or use
-`time_limit` and read pstore in TWRP. `tools/analyze-max77705-log.mjs` reads the saved log:
+For screen-on heat add `gov_policy=2 cpufreq_gov_big_max=1469000 mali_gov_frame=455`; for screen-off add
+`panel_sleep=1` first and `sleep_cores=1` only after the picture has been proven to come back. The diagnostics are
+read-only. There is still no system sleep (CPU_SUSPEND/C2 is not done) and the panel keeps scanning without
+`panel_sleep=1`, so the screen-off load is not Android's. For a charging run, do not capture the log over the PC
+USB cable (that makes the PC the charger): charge from the wall first, then connect the phone to the PC and send
+`log` at the console, or use `time_limit` and read pstore in TWRP. `tools/analyze-max77705-log.mjs` reads the saved
+log, including the `fps:`/GPU lines, and prints a Heat section:
 
 ```
 node tools/analyze-max77705-log.mjs s9-charge.log
 ```
 
-[docs/power-charging.md](docs/power-charging.md) has the commits, the log lines and the test order.
+[docs/heat.md](docs/heat.md) has the heat analysis and the screen-on test order;
+[docs/power-charging.md](docs/power-charging.md) has the commits, the charger decode and the charging test order.
 
 ## Brightness
 

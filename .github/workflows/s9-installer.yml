@@ -31,7 +31,7 @@ on:
         description: The partition the iOS system image is written to
         default: SYSTEM
       boot_args:
-        description: "Extra boot-arguments (for example mali=9, or max77705_wdt=1 max77705_diag=1 max77705_fg_s=30 panel_sleep=1 sleep_cores=1 gov_policy=3; gov_policy=3 is the screen-on one; see docs/power-charging.md)"
+        description: "Extra boot-arguments (for example mali=9, or max77705_wdt=1 max77705_diag=1 max77705_fg_s=30 tmu=3 fps_log=1; for screen-on heat add gov_policy=2 cpufreq_gov_big_max=1469000 mali_gov_frame=455; gov_policy=3 can be hotter; see docs/heat.md)"
         default: ""
       time_limit:
         description: A test run's seconds, after which the phone restarts into TWRP with the log (0, no limit)

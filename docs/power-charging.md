@@ -2,12 +2,15 @@
 
 Status: 10 November 2026. The three new power switches (`max77705_wdt`, `panel_sleep`, `sleep_cores`) are **off by
 default** in the kernel, and as of their commits they were **built, not yet run on a phone**. `gov_policy=3` was booted
-on phone 2. The S9's defaults (`tmu=3`, `fb_psr=300`, `gov_policy=2`, `gov_wake=1`, `cam_s9=7`) are already on. Keep
-TWRP in RECOVERY and a backup before testing any switch.
+on phone 2, but it is **not a heat fix** and is no longer the recommended screen-on test: it overrides
+`cpufreq_gov_big_max`, disables parking once the big zone is cooling, and allows two M3s at 2314 MHz when it does
+park. [heat.md](heat.md) has the control law and the measurements. The S9's defaults (`tmu=3`, `fb_psr=300`,
+`gov_policy=2`, `gov_wake=1`, `cam_s9=7`) are already on. Keep TWRP in RECOVERY and a backup before testing any switch.
 
 This page now also covers the "hot, and the charging current fell from 0.88 A to 0.47 A" report of 10 November 2026.
 There is no log from that phone yet; the sections below say what the two numbers can and cannot mean, and how to
-capture the log that decides it.
+capture the log that decides it. The heat side — where the watts go, why `gov_policy=3` is not the lever, and the
+screen-on tests — is [heat.md](heat.md).
 
 ## The commits
 
@@ -17,7 +20,7 @@ capture the log that decides it.
 | `8f2d90f9b8` | 7 Nov | `max77705_wdt=1`: feeds the MAX77705 charger's watchdog (`CNFG_06` WDTCLR) every 30 s while `CNFG_00` says WDTEN. Without it the charger stopped within five minutes of every boot on USB (about 1 A at boot, then "on a charger, not charging") | Built, not yet run on a phone; off by default |
 | `ff81cf3f5d`, merge `1e6ef42f00` | 7 Nov | `max77705_diag=1`: read-only dump of `CHG_INT_OK`, `DETAILS_00-03` and `CNFG_00-14`. `max77705_fg_s=S`: a gauge line every S seconds (AvgCurrent and QH besides Current) | Built, not yet run on a phone; off by default |
 | `de9b699a37`, `2e04990f13`, `42abb03101` | 7 Nov | `panel_sleep=1`: Samsung's display-off/sleep-in sequence when iOS turns the screen off, display-on on wake. `sleep_cores=1`: the four M3s go through PSCI CPU_OFF `sleep_cores_after=` seconds (10) after screen off, and start again on wake. `sleep_cores=2` also takes the A55s; never the boot processor or the loader's core | Built, not yet run on a phone; off by default |
-| `5cc13f8010`, merge `8697cb7d97` | 5 Nov | `gov_policy=3`: the scion governor parks two M3s when the load asks and the big zone is under 70 C, brings them back at 78 C. `gov_policy=2` is the same law without parking | Booted on phone 2; off by default upstream |
+| `5cc13f8010`, merge `8697cb7d97` | 5 Nov | `gov_policy=3`: the scion governor parks two M3s when the load asks and the big zone is under 70 C, brings them back at 78 C. `gov_policy=2` is the same law without parking | Booted on phone 2; not a heat fix (parking is off when `c->thermal != 0`, and two M3s may run at 2314 MHz); see [heat.md](heat.md) |
 | `1cf0f53183` | 5 Nov | `fb_psr=<ms>`: the panel keeps its own frame after `<ms>` without a frame instead of the DECON refreshing it at every TE | Off upstream; **on in the S9's config** as `fb_psr=300` |
 | `3e07833aa4` | 5 Nov | `gov_wake=1`: a finger coming down asks for the GPU's frame floor before the first frame needs it | Off upstream; **on in the S9's config** |
 | `f0fe052149` | 8 Nov | `docs/screen-off-power.md`: the S9's idle states. **There is still no system sleep** (`gSleepDisabledFlag=1`); the cores only WFI, and CPU_SUSPEND/C2 is the next step | Documentation only |
@@ -29,8 +32,10 @@ not add any of the three power switches.
 
 `configs/starlte.config` sets `tmu=3`, `fb_psr=300`, `gov_policy=2`, `gov_wake=1`, `cam_s9=7 cam=5` and
 `cpufreq_gov=1`. So the thermal stop and the governor's temperature ceilings are already active, the panel
-self-refresh and the GPU wake are already on, and the camera no longer streams at boot. The missing pieces are the
-charger watchdog feed, the panel sleep, the M3 power-off while the screen is off, and the parking policy.
+self-refresh and the GPU wake are already on, and the camera no longer streams at boot. The missing pieces for a
+cooler phone are the opt-in screen-on CPU/GPU caps (`cpufreq_gov_big_max`, `mali_gov_frame`), panel sleep and the
+M3 power-off while the screen is off; the charger watchdog feed only keeps the charger running. The parking policy
+is not one of them: [heat.md](heat.md) says why it can run hotter.
 
 ## Why the last test did not make the phone cooler
 
@@ -50,8 +55,10 @@ with the screen on. None of those five is a screen-on heat lever:
   does nothing.
 - `sleep_cores=1` takes the M3s off only after the display has been off for 10 seconds. With the screen on it does
   nothing.
-- `gov_policy=3`, the one switch in the list that changes the screen-on CPU law, was **not** in that run. The S9's
-  default is `gov_policy=2`, which never parks an M3.
+- `gov_policy=3`, the one switch in the list that changes the screen-on CPU law, was **not** in that run. It is
+  also not a cooling switch: it parks two M3s only under 70 C, hands all four back as soon as a thermal ceiling is
+  active, and when it does park them the ceiling is 2314 MHz. `gov_policy=2`, the S9's default, is the one to keep;
+  its lever is `cpufreq_gov_big_max=`.
 
 So the only screen-on changes in that run were the defaults: `cpufreq_gov=1` (its 83/96 C ceilings are already in
 `gov_policy=2` too), `fb_psr=300`, `gov_wake=1` and the lazy camera. If the image predates 5 November, the front
@@ -60,22 +67,29 @@ been opened, or build a new image from `kernel_ref=main`.
 
 For screen-on heat the order is:
 
-1. a 5 November or later kernel (lazy camera stream) and `gov_policy=3`;
-2. Wi-Fi and Bluetooth off, brightness at the level actually wanted (the panel is dimmed by the AOR, not switched
+1. a 5 November or later kernel (lazy camera stream), `gov_policy=2 cpufreq_gov_big_max=1469000`, then `1261000`;
+2. `mali_gov_frame=455`, then `0`, with `fps_log=1` (the GPU floor is 572 MHz while any frame arrived in the last
+   100 ms, even on a nearly static screen; the cap is applied only after the floor);
+3. Wi-Fi and Bluetooth off, brightness at the level actually wanted (the panel is dimmed by the AOR, not switched
    off, so a dark screen still scans and composites);
-3. the load: SpringBoard's poster/imagers, a game, the camera, or a loop in an app; `cpufreq_gov` lines say which
-   cluster and how much;
-4. only then the charging current (the charger adds heat on top of the SoC; it is not the SoC's heat).
+4. the load: SpringBoard's poster/imagers, a game, the camera, or a loop in an app; `cpufreq_gov` and `fps:` lines
+   say which cluster/GPU and how much;
+5. only then the charging current (the charger adds heat on top of the SoC; it is not the SoC's heat).
+
+[heat.md](heat.md) explains the thermal chain, the 83/76/96 C ceilings, the GPU caps and the screen-off gap
+(no system sleep, no `CPU_SUSPEND`, the panel scans without `panel_sleep=1`).
 
 `panel_sleep=1` and `sleep_cores=1` are for a different measurement: leave the screen off for 10-30 minutes and
 compare the drain and the battery temperature with and without them.
 
 ## 0.88 A to 0.47 A: what the two numbers can mean
 
-0.88 A is about 900 mA and 0.47 A is about 500 mA. Those are exactly two values this phone uses:
+0.88 A is about 900 mA and 0.47 A is about 500 mA. The report's numbers were measured at the powered hub's port,
+so they are **input** current at about 5 V; the battery gauge is a different number, and can be lower (or negative)
+while the port still shows 0.47 A. The same two values also appear on the charger's and the phone's own scales:
 
 - a plain USB 2.0 cable/port: the S9's device tree sets `input_current = 475 mA` and `charging_current = 550 mA`
-  (`battery_data_starlte_common.dtsi`, `cable-info/current_group_1`, cable type 4 `USB`);
+  (`battery_data_starlte_common.dtsi`, `cable-info/current_group_12`, cable type 4 `USB`);
 - the `CNFG_09` input-limit code `0x13` is 500 mA; the code for 900 mA is `0x23`.
 
 The MAX77705 charger does not decide the battery current by itself. It has two limits:
@@ -154,7 +168,7 @@ port, not from the wall charger. That is the largest confound in the 0.88 A obse
 1. **Wall charger first, PC afterwards (preferred).** Boot with the wall charger and
 
    ```
-   max77705_wdt=1 max77705_diag=1 max77705_fg_s=30 gov_policy=3 tmu=3
+   max77705_wdt=1 max77705_diag=1 max77705_fg_s=30 tmu=3 fps_log=1
    ```
 
    Let it run 20-30 minutes with the screen in the state being judged (on, or off after the screen-off switches are
@@ -215,15 +229,18 @@ Rebuild the installer with `kernel_ref=main` first: an image older than 5 Novemb
    `GenericARMPE: sleep_cores: cpu N taken off` and `... started again`, and the `psci: cpu N: started again;
    AFFINITY_INFO` line. `sleep_cores=2` also takes the A55s and is riskier: do not start with it.
 
-4. **Parking governor** (heat under load, and the only screen-on switch in this list):
+4. **Screen-on heat: CPU ceiling and GPU floor** (no rebuild; `tmu=3` is a default):
 
    ```
-   max77705_wdt=1 max77705_diag=1 max77705_fg_s=30 gov_policy=3
+   max77705_wdt=1 max77705_diag=1 max77705_fg_s=30 tmu=3 fps_log=1
+   max77705_wdt=1 max77705_diag=1 max77705_fg_s=30 tmu=3 fps_log=1 gov_policy=2 cpufreq_gov_big_max=1469000 mali_gov_frame=455
+   max77705_wdt=1 max77705_diag=1 max77705_fg_s=30 tmu=3 fps_log=1 gov_policy=2 cpufreq_gov_big_max=1261000 mali_gov_frame=0
    ```
 
-   `gov_policy=3` needs the TMU; `tmu=3` is a default. Compare the `cpufreq_gov` temperature and rate lines with
-   `gov_policy=2` at the same workload (same app, same brightness, Wi-Fi in the same state). If the phone is hotter
-   under the same load, go back to `2`.
+   Keep the same app, brightness and Wi-Fi/Bluetooth state. Compare the `cpufreq_gov` big MHz/load/`temp big`
+   lines and the `fps:` GPU MHz/busy/G3D lines. `gov_policy=3` is **not** part of this comparison: it overrides
+   `cpufreq_gov_big_max` and may run two M3s at 2314 MHz. `heat.md` has the full sequence and the thresholds the
+   analyzer uses.
 
 ## What not to expect
 
