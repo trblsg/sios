@@ -522,8 +522,8 @@ function analyze(log) {
 	}
 
 	if (displayOff === 0) {
-		add('info', 'The screen was on for the whole captured log',
-			'panel_sleep=1 and sleep_cores=1 had nothing to do: they only act when iOS turns the display off. For screen-on heat the levers are gov_policy=3, the camera, Wi-Fi/Bluetooth and the load.');
+		add('info', 'No display-off event in this log',
+			'If the screen stayed on, panel_sleep=1 and sleep_cores=1 had nothing to do: they only act when iOS turns the display off. For screen-on heat the levers are gov_policy=3, the camera, Wi-Fi/Bluetooth and the load.');
 	} else {
 		add('info', 'The screen went off and on',
 			`${displayOff} off / ${displayOn} on; ${panelSleep} panel_sleep line(s); ${coreOff} core(s) taken off, ${coreOn} started again.` +
@@ -532,8 +532,8 @@ function analyze(log) {
 
 	if (bigMhz.length > 0) {
 		const highPct = Math.round(100 * bigHigh / bigMhz.length);
-		add(highPct >= 50 ? 'warn' : 'info', 'The M3s\' clock',
-			`At or above 1.7 GHz in ${highPct}% of the cpufreq_gov lines` +
+		add(highPct >= 50 && bigMhz.length >= 5 ? 'warn' : 'info', 'The M3s\' clock',
+			`At or above 1.7 GHz in ${highPct}% of the ${bigMhz.length} cpufreq_gov line(s)` +
 			(maxCpuTemp != null ? `; the hottest big-cluster reading was ${formatC(maxCpuTemp)}` : '') +
 			'. gov_policy=3 parks two M3s when the load allows and the big zone is under 70 °C.');
 		if (maxCpuTemp != null && maxCpuTemp >= 80) {
