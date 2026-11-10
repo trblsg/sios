@@ -116,6 +116,78 @@ point), `battery,temp_high_threshold_event=500` (50 °C), and the kernel's `tmu_
 HakiOS does not implement `sec_battery`'s JEITA steps, so those are thresholds to watch, not a charger current
 that is automatically reduced.
 
+## The screen-off, unplugged, mainboard-hot case (10 November)
+
+The owner's answers on the 0.88 A / 0.47 A report:
+
+- the hub is rated 2 A; the phone, not the hub, is hot;
+- at 0.47 A the battery is at 30% and iOS says charging;
+- the screen is off and the phone is locked; every app is closed; brightness is at its minimum;
+- **the phone is hot with the charger out too**, and with the back cover off the **mainboard** is very hot.
+
+That last pair changes the priority. The charger and the cell are not the main heat source: a phone that
+stays hot unplugged is making the heat itself. The 0.47 A is a separate charging-limit problem, not the
+cause of the heat.
+
+The 2 A rating does not mean the phone may draw 2 A. A hub port is normally a standard USB data port
+(SDP): it advertises 500 mA, and the S9's device tree maps cable type 4 (`USB`) to `current_group_12`,
+475 mA input / 550 mA charge. The 2 A is the hub's capacity, not the port's advertised current. 0.47 A is
+therefore the expected input for this port, not a fault by itself. At 30% the cell is far from its CV
+phase, so the 500 mA is not the battery asking for less: it is the port/register limit. The log's
+`CNFG_09` says which:
+
+- `0x13` (500 mA): the input limit is in the charger's register (S-Boot or the boot state left it
+  there). HakiOS never writes `CNFG_09`, so a hotplug does not raise it. Only a charge-only/DCP source,
+  or the opt-in charger patch, can ask for more.
+- `0x23` (900 mA) or higher, but the port still shows 0.47 A: the charger's AICL or the cable is
+  limiting; the log then shows `CNFG_09` falling in 100 mA steps, or the current staying low while the
+  register stays high.
+- `CNFG_02` (fast charge) at 500 mA is a second cap; the battery current then stops at 500 mA even if
+  `CNFG_09` is higher.
+
+The owner has already booted with **both** `panel_sleep=1` and `sleep_cores=1`; the phone is still hot
+unplugged, and the hottest part of the mainboard is its **center**. That rules out the panel scan and the
+M3s as the whole story. `sleep_cores=1` only takes the M3s off; the A55s, the GPU/ISP and the SoC's uncore
+stay up. The center of the board is the SoC/PMIC area; the charger is at the bottom, so the charger is not
+the hot spot either.
+
+With the screen off and every app closed, the heat has to come from the platform's screen-off path:
+
+- the panel may still be scanning, with DSIM/DECON up, unless `panel_sleep=1` was in the boot arguments;
+- there is no system sleep and no `CPU_SUSPEND`; the cores only WFI, so every powered cluster leaks, and
+  Wi-Fi/BT, the sensor hub and the UFS service keep running;
+- a background process can still keep the A55s at a high rate; the `cpufreq_gov` lines say which cluster
+  and how much;
+- the GPU, the camera ISP or the front camera can be busy with the screen off; `fps:`, `mali: GPU busy`
+  and `exynos_camera: STREAM ON/OFF` are the evidence;
+- the PMIC and the SoC's uncore sit in the center of the board; even unplugged, a high SoC load makes them
+  hot.
+
+The tests, all screen off, unplugged, one change at a time:
+
+1. **Baseline log with `panel_sleep=1 sleep_cores=1`.** 10-15 minutes. Confirm the `s6e3ha8: panel_sleep:`
+   lines and the `GenericARMPE: sleep_cores: cpu N taken off` lines; then read `cpufreq_gov` big/lit MHz and
+   load, `tmu:` zones and `fps:`. If the M3s are off and big is cool but little is hot, the A55s are next.
+2. **`sleep_cores=2`.** Also takes the A55s off after the display goes off; prove the wake before keeping it.
+   If the center cools only here, the A55s (and their background load) were the source.
+3. **Wi-Fi/Bluetooth off.** If the center cools, the radios are part of it.
+4. **Camera/ISP.** Check `exynos_camera: STREAM ON`; if the ISP zone is the hottest, close Camera.app and any
+   reader; `cam_s9=7` is lazy but a reader still starts it.
+5. **`mali_gov_frame=0`** only if `fps:` shows the GPU above its floor with the screen off.
+
+All with `tmu=3 fps_log=1 max77705_diag=1 max77705_fg_s=30` (add `max77705_wdt=1` when charging). Capture the
+unplugged baseline without the PC cable attached: run it for 10-15 minutes, then connect the phone to the PC
+and type `log` at the console (it reprints the kernel log from its start), or set `time_limit=900` and read
+pstore in TWRP. If the PC cable is attached during the run, the PC becomes the charger and the baseline is
+lost. The log's `cpufreq_gov` big/lit MHz and load, the `fps:` GPU MHz/busy/G3D, the `tmu:` zones
+(BIG/LITTLE/G3D/ISP) and the `GenericARMPE: the display off` / `s6e3ha8: panel_sleep:` lines name the block
+that is hot.
+
+If the log shows big/little/G3D/ISP all under their cooling points with the M3s off and the A55s off, yet
+the center is still very hot, the remaining heat is the SoC uncore, the display pipeline or the PMIC. The
+boot-arg fixes are then exhausted; the next step is the kernel's `CPU_SUSPEND`/cluster power-down work
+(below, "What is not implemented"), not another governor switch.
+
 ## The log that names the source
 
 Use the installer workflow's `boot_args` input. Nothing below needs a kernel rebuild. `fps_log=1` is the one
@@ -219,7 +291,9 @@ changes behaviour on a phone that is already hot.
   tuned; the S9's TMU already has the sensors, so this is a userland/kernel bridge, not a new driver.
 - **System sleep / `CPU_SUSPEND`.** The bigger fix for screen-off heat and drain: `CPU_SUSPEND` with the
   device tree's `0x10000` state, cluster power-down, and the panel/DSIM/DECON clocks off. Kernel
-  `docs_screen-off-power.md` describes the pieces and the risks. Not a screen-on fix.
+  `docs_screen-off-power.md` describes the pieces and the risks. Not a screen-on fix. The 10 November case
+  (screen off, `panel_sleep=1` and `sleep_cores=1` already on, still hot unplugged, center of the board) is
+  the evidence: the remaining A55s, uncore and PMIC need a real idle state, not another governor switch.
 - **Charger current control (`max77705_chg=auto`).** Set `CNFG_09`/`CNFG_02` from the charger type on VBUS
   attach, off by default, only after a log shows the input limit is the cause. It is a charging fix, not a
   heat fix: lowering the current slows charging and reduces charger heat, but it does not cool a hot SoC.

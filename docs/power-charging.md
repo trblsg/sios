@@ -92,6 +92,11 @@ while the port still shows 0.47 A. The same two values also appear on the charge
   (`battery_data_starlte_common.dtsi`, `cable-info/current_group_12`, cable type 4 `USB`);
 - the `CNFG_09` input-limit code `0x13` is 500 mA; the code for 900 mA is `0x23`.
 
+A hub port rated 2 A is normally a standard USB data port (SDP): it advertises 500 mA, and the 2 A is the hub's
+total capacity, not what the phone may draw. At 30% the cell is far from its CV phase, so a 0.47 A port reading is
+the port/register limit, not the battery asking for less. `CNFG_09` `0x13` confirms the register; `0x23` or higher
+with the port still at 0.47 A points at AICL, the cable or the charger's input regulation.
+
 The MAX77705 charger does not decide the battery current by itself. It has two limits:
 
 | Register | Field | Step | Decode |

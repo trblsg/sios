@@ -129,6 +129,9 @@ const COOL_RE = /^cpufreq_gov:\s+(big|lit) at\s+(-?\d+)\.(\d+)\s+C:\s+its ceilin
 /* hakios.mali.c, one line per G3D cap change */
 const MALI_CAP_RE = /^mali:\s+mali_gov:\s+the G3D at\s+(-?\d+)\.(\d+)\s+C:\s+(\d+)\s+MHz at most now/;
 
+/* hakios.exynos_tmu.c, every tmu_log seconds or on a 5 C step */
+const TMU_RE = /^tmu:\s+(\d+)\s+sensors read;\s+hottest\s+(big|little|g3d|isp)\s+at\s+(-?\d+)\.(\d+)\s+C;/;
+
 const RAW_REGS = Array.from({ length: 20 }, (_, i) => 0xb2 + i);   /* 0xB2..0xC5 */
 
 function stripPrefix(line) {
@@ -148,6 +151,7 @@ function parseLog(text) {
 	const cpus = [];
 	const gpus = [];
 	const maliBusy = [];
+	const tmuLines = [];
 	const cools = [];
 	const events = [];
 	const wdt = { started: false, kicked: 0, failed: 0, skipped: 0, summaries: [] };
@@ -234,6 +238,24 @@ function parseLog(text) {
 					t,
 					tempC: Number(`${cap[1]}.${cap[2]}`),
 					capMhz: Number(cap[3])
+				});
+			}
+			const tmuLine = body.match(TMU_RE);
+			if (tmuLine) {
+				const zones = {};
+				const zoneRe = /(big|little|g3d|isp)\d+=(-?\d+)\.(\d+)/g;
+				let zone;
+				while ((zone = zoneRe.exec(body)) !== null) {
+					const mc = Number(`${zone[2]}.${zone[3]}`);
+					zones[zone[1]] = zones[zone[1]] == null ? mc : Math.max(zones[zone[1]], mc);
+				}
+				tmuLines.push({
+					lineNo,
+					t,
+					sensors: Number(tmuLine[1]),
+					hottest: tmuLine[2],
+					hottestC: Number(`${tmuLine[3]}.${tmuLine[4]}`),
+					zones
 				});
 			}
 			if (/GenericARMPE: the display (off|on)/.test(body)) {
@@ -364,7 +386,7 @@ function parseLog(text) {
 		}
 	}
 
-	return { lines: lines.length, max77705Lines, states, diags, fgs, cpus, gpus, maliBusy, cools, events, wdt, firstT, lastT };
+	return { lines: lines.length, max77705Lines, states, diags, fgs, cpus, gpus, maliBusy, tmuLines, cools, events, wdt, firstT, lastT };
 }
 
 /* the raw 0xB2-0xC5 bytes as the driver's names, with the charger's own bit fields */
@@ -420,7 +442,7 @@ function formatCode(code) {
 }
 
 function analyze(log) {
-	const { states, diags, fgs, cpus, gpus, maliBusy, cools, events, wdt } = log;
+	const { states, diags, fgs, cpus, gpus, maliBusy, tmuLines, cools, events, wdt } = log;
 	const findings = [];
 	const add = (level, title, detail) => findings.push({ level, title, detail });
 
@@ -490,6 +512,8 @@ function analyze(log) {
 	const bigHighPct = bigMhz.length ? Math.round(100 * bigHigh / bigMhz.length) : null;
 	const cpuTemp = cpus.map((c) => c.tempBigC).filter(Number.isFinite);
 	const maxCpuTemp = cpuTemp.length ? Math.max(...cpuTemp) : null;
+	const litTemp = cpus.map((c) => c.tempLitC).filter(Number.isFinite);
+	const maxLitTemp = litTemp.length ? Math.max(...litTemp) : null;
 
 	/* the GPU: the fps line has its clock, busy share and G3D sensor; mali: GPU busy has 5 s windows */
 	const gpuSamples = gpus.filter((g) => !g.none && g.mhz > 0);
@@ -505,6 +529,14 @@ function analyze(log) {
 	const coolLit = cools.filter((c) => c.kind === 'cpu' && c.cluster === 'lit' && c.action === 'now').length;
 	const cap455 = cools.filter((c) => c.kind === 'gpu' && c.capMhz === 455).length;
 	const cap260 = cools.filter((c) => c.kind === 'gpu' && c.capMhz === 260).length;
+
+	/* the TMU summaries: the hottest zone and the ISP, which no other line carries */
+	const tmuBig = tmuLines.map((x) => x.zones.big).filter(Number.isFinite);
+	const tmuIsp = tmuLines.map((x) => x.zones.isp).filter(Number.isFinite);
+	const tmuG3d = tmuLines.map((x) => x.zones.g3d).filter(Number.isFinite);
+	const maxTmuBig = tmuBig.length ? Math.max(...tmuBig) : null;
+	const maxIsp = tmuIsp.length ? Math.max(...tmuIsp) : null;
+	const maxTmuG3d = tmuG3d.length ? Math.max(...tmuG3d) : null;
 
 	/* --- the findings --- */
 
@@ -560,8 +592,10 @@ function analyze(log) {
 				`It stayed at ${formatMa(firstLimit.ma)} (CNFG_09 ${formatCode(firstLimit.code)}). A falling battery current with a constant limit is not AICL: it is the battery's CV taper, the charger's thermal regulation, or the system load rising.`);
 		}
 		if (firstLimit && firstLimit.ma <= 550) {
+			const lowPct = lastState && lastState.pct != null && lastState.pct < 60;
 			add('warn', 'The input limit is at or near the USB 2.0 500 mA limit',
-				`CNFG_09 ${formatCode(firstLimit.code)} = ${formatMa(firstLimit.ma)}. A wall charger that the phone sees as a USB host, or a PC USB port used for the console, gives this. 0.47 A at the battery is consistent with it.`);
+				`CNFG_09 ${formatCode(firstLimit.code)} = ${formatMa(firstLimit.ma)}. A hub port is normally a standard USB data port (SDP) and advertises 500 mA; its 2 A rating is capacity, not what it offers the phone. A wall charger the phone sees as a USB host, or a PC USB port used for the console, gives the same. A 0.47 A port reading is consistent with this limit.` +
+				(lowPct ? ` The last state is ${lastState.pct.toFixed(2)}%, far from the CV phase: the 500 mA is not the cell asking for less.` : ''));
 		}
 	}
 
@@ -650,6 +684,16 @@ function analyze(log) {
 		}
 	}
 
+	if (maxLitTemp != null && maxLitTemp >= 76 && (maxCpuTemp == null || maxLitTemp > maxCpuTemp + 5)) {
+		add('warn', 'The A55 cluster is hot',
+			`${formatC(maxLitTemp)}; Android cools LITTLE from 76 °C. With the screen off, sleep_cores=1 only takes the M3s; sleep_cores=2 also takes the A55s. Prove the wake before keeping it.`);
+	}
+	if (coreOff > 0 && maxCpuTemp != null && maxCpuTemp < 70 && maxLitTemp != null && maxLitTemp < 70 &&
+	    (maxG3d == null || maxG3d < 85) && (maxIsp == null || maxIsp < 91)) {
+		add('info', 'The CPU and ISP zones are cool with the M3s off',
+			`big ${formatC(maxCpuTemp)}, little ${formatC(maxLitTemp)}, G3D ${formatC(maxG3d)}, ISP ${formatC(maxIsp)}; if the mainboard is still hot, the heat is outside these zones: the PMIC, the radios, the display pipeline or the SoC uncore.`);
+	}
+
 	if (gpuSamples.length > 0) {
 		add('info', 'The GPU\'s clock and temperature',
 			`${gpuSamples.length} fps line(s): ${gpuMaxMhz} MHz at most, ` +
@@ -681,6 +725,11 @@ function analyze(log) {
 			`${maliBusy.length} line(s), ${Math.round(maliBusyAvg)}% busy on average. Add fps_log=1 for the clock and G3D temperature.`);
 	}
 
+	if (maxIsp != null && maxIsp >= 91 && (maxCpuTemp == null || maxIsp >= maxCpuTemp) && (maxG3d == null || maxIsp >= maxG3d)) {
+		add('warn', 'The ISP/camera is the hottest TMU zone',
+			`${formatC(maxIsp)}; Android starts cooling the ISP at 91 °C. Check \`exynos_camera\` for a stream with the screen off, and close Camera.app or any reader.`);
+	}
+
 	if (charging.length > 0 && maxTemp != null && maxTemp >= 42 && maxTemp < 45) {
 		add('info', 'The battery is warm while charging',
 			`${formatC(maxTemp)}; the charger adds heat of its own. Repeat the same workload with the cable out: if the phone cools, the charger is part of the source, not the SoC.`);
@@ -692,17 +741,22 @@ function analyze(log) {
 	}
 
 	/* the heat, by the evidence the log carries: CPU, GPU, charger/battery, panel */
+	const heatCpu = maxCpuTemp ?? maxTmuBig;
+	const heatGpu = maxG3d ?? maxTmuG3d;
 	const heatSources = [];
-	if (maxCpuTemp != null && maxCpuTemp >= 80) {
-		heatSources.push(`CPU: big zone ${formatC(maxCpuTemp)}` +
+	if (heatCpu != null && heatCpu >= 80) {
+		heatSources.push(`CPU: big zone ${formatC(heatCpu)}` +
 			(bigMhz.length >= 5 && bigHighPct != null ? `, M3s >= 1.7 GHz in ${bigHighPct}% of samples` : ''));
-	} else if (bigMhz.length >= 5 && maxCpuTemp != null && maxCpuTemp >= 78 && bigHighPct != null && bigHighPct >= 50) {
-		heatSources.push(`CPU: big zone ${formatC(maxCpuTemp)}, M3s >= 1.7 GHz in ${bigHighPct}% of samples`);
+	} else if (bigMhz.length >= 5 && heatCpu != null && heatCpu >= 78 && bigHighPct != null && bigHighPct >= 50) {
+		heatSources.push(`CPU: big zone ${formatC(heatCpu)}, M3s >= 1.7 GHz in ${bigHighPct}% of samples`);
 	}
-	if (maxG3d != null && maxG3d >= 85) {
-		heatSources.push(`GPU: G3D ${formatC(maxG3d)}` + (gpuFloorPct != null && gpuFloorPct >= 50 ? `, clock floor ${gpuFloorPct}% of samples` : ''));
+	if (heatGpu != null && heatGpu >= 85) {
+		heatSources.push(`GPU: G3D ${formatC(heatGpu)}` + (gpuFloorPct != null && gpuFloorPct >= 50 ? `, clock floor ${gpuFloorPct}% of samples` : ''));
 	} else if (gpuFloorPct != null && gpuFloorPct >= 50 && gpuAvgBusy != null && gpuAvgBusy < 35) {
 		heatSources.push(`GPU: clock floor ${gpuFloorPct}% of samples at under 25% busy (${Math.round(gpuAvgBusy)}% average)`);
+	}
+	if (maxIsp != null && maxIsp >= 91 && (maxCpuTemp == null || maxIsp >= maxCpuTemp) && (maxG3d == null || maxIsp >= maxG3d)) {
+		heatSources.push(`ISP/camera: ${formatC(maxIsp)} (the hottest TMU zone)`);
 	}
 	if (charging.length > 0 && maxTemp != null && maxTemp >= 42) {
 		heatSources.push(`charger/battery: ${formatC(maxTemp)} while charging`);
@@ -738,6 +792,9 @@ function analyze(log) {
 	if (displayOff > 0 && panelSleep === 0) {
 		next.push('Add `panel_sleep=1` and repeat the screen-off run; check `s6e3ha8: panel_sleep:` lines and the picture when it wakes.');
 	}
+	if (displayOff > 0) {
+		next.push('If the phone is hot with the charger out too, the charger is not the source: run the screen-off log unplugged and read `cpufreq_gov` big/lit MHz/load, `fps:` GPU MHz/busy and `tmu:` zones; then try `panel_sleep=1` and `sleep_cores=1`.');
+	}
 	if (charging.length > 0 && maxTemp != null && maxTemp >= 42) {
 		next.push('Repeat the same workload with the charger out and with it in; if the battery temperature falls only when unplugged, the charger is part of the heat and the fix is the source/current, not the CPU law.');
 	}
@@ -745,27 +802,34 @@ function analyze(log) {
 	next.push('Read CNFG_09 as (code + 1) × 25 mA (0x13 = 500, 0x23 = 900, 0x3B = 1500, 0x47 = 1800 mA); CNFG_02 as code × 50 mA (0x0A = 500, 0x1E = 1500, 0x2A = 2100 mA).');
 
 	return {
-		states, diags, fgs, cpus, gpus, maliBusy, cools, events, wdt,
+		states, diags, fgs, cpus, gpus, maliBusy, tmuLines, cools, events, wdt,
 		firstState, lastState, firstCharging, lastCharging,
 		currentDrop, minCurrent, maxCurrent, maxTemp, minTemp,
 		firstLimit, lastLimit, peakLimit, maxLimitDrop, limitDrops,
 		firstFast, lastFast, fastMa: firstFast ? firstFast.ma : null, chgDtls, chginValid,
 		displayOff, displayOn, panelSleep, coreOff, coreOn, cameraOn, cameraOff,
-		bigHigh, bigHighPct, bigMhz, maxCpuTemp,
+		bigHigh, bigHighPct, bigMhz, maxCpuTemp, maxLitTemp,
 		gpuSamples, gpuMaxMhz, gpuAvgBusy, gpuFloorSamples, gpuFloorPct, maxG3d, maliBusyAvg,
-		coolBig, coolLit, cap455, cap260, heatSources,
+		maxTmuBig, maxTmuG3d, maxIsp, coolBig, coolLit, cap455, cap260, heatSources,
 		heat: {
-			maxBigC: maxCpuTemp,
+			maxBigC: maxCpuTemp ?? maxTmuBig,
+			maxLitC: maxLitTemp,
 			bigHighPct,
-			maxG3dC: maxG3d,
+			maxG3dC: maxG3d ?? maxTmuG3d,
 			gpuAvgBusyPct: gpuAvgBusy,
 			gpuMaxMhz,
 			gpuFloorPct,
 			gpuSamples: gpuSamples.length,
+			maxTmuBigC: maxTmuBig,
+			maxTmuG3dC: maxTmuG3d,
+			maxIspC: maxIsp,
+			tmuSamples: tmuLines.length,
 			maxBatteryC: maxTemp,
 			charging: charging.length > 0,
 			displayOff,
 			panelSleep,
+			coreOff,
+			coreOn,
 			coolBig,
 			coolLit,
 			cap455,
@@ -844,11 +908,16 @@ function report(input, log, a) {
 
 	p('Heat');
 	p('----');
-	p(`  CPU: big ${formatC(a.heat.maxBigC)}` + (a.heat.bigHighPct != null ? `, M3s >= 1.7 GHz in ${a.heat.bigHighPct}% of ${a.bigMhz.length} sample(s)` : '') + `; thermal ceilings: big ${a.heat.coolBig}, lit ${a.heat.coolLit}`);
+	p(`  CPU: big ${formatC(a.heat.maxBigC)}, little ${formatC(a.heat.maxLitC)}` + (a.heat.bigHighPct != null ? `, M3s >= 1.7 GHz in ${a.heat.bigHighPct}% of ${a.bigMhz.length} sample(s)` : '') + `; M3s off/on: ${a.heat.coreOff}/${a.heat.coreOn}; ceiling changes: big ${a.heat.coolBig}, lit ${a.heat.coolLit}`);
 	if (a.heat.gpuSamples > 0) {
 		p(`  GPU: ${a.heat.gpuMaxMhz} MHz, ${a.heat.gpuAvgBusyPct == null ? '?' : Math.round(a.heat.gpuAvgBusyPct)}% busy, G3D ${formatC(a.heat.maxG3dC)}; clock floor ${a.heat.gpuFloorPct}% of samples`);
+	} else if (a.gpus.length > 0) {
+		p(`  GPU: ${a.gpus.length} fps line(s), all "gpu: none"; the display still scanned`);
 	} else {
 		p('  GPU: no fps line (add fps_log=1)');
+	}
+	if (a.heat.tmuSamples > 0) {
+		p(`  TMU: big ${formatC(a.heat.maxTmuBigC)}, G3D ${formatC(a.heat.maxTmuG3dC)}, ISP ${formatC(a.heat.maxIspC)} (${a.heat.tmuSamples} summary line(s))`);
 	}
 	p(`  battery: ${formatC(a.heat.maxBatteryC)}` + (a.heat.charging ? ' while charging' : '') + `; screen off/on: ${a.heat.displayOff}/${a.displayOn}; panel_sleep lines: ${a.heat.panelSleep}`);
 	p(`  likely: ${a.heat.sources.join('; ')}`);
@@ -965,7 +1034,8 @@ function selfTest() {
 		'fps: 1 refreshes missed while moving, the longest gap 16.7 ms; zc: 8 in place, 0 copied, 0 into the one shown; gpu: 40% busy, 2500 us a frame shown, 120 jobs (20 us each, 5 us queued), 572 MHz (mali_gov), 3 switches, G3D 86 C',
 		'mali: GPU busy 22% of 5 s: vertex and tiler 10 jobs 6 ms (600 us each), fragment 120 jobs 40 ms (333 us each)',
 		'cpufreq_gov: big at 83.1 C: its ceiling now 1690000 kHz',
-		'mali: mali_gov: the G3D at 85.0 C: 455 MHz at most now'
+		'mali: mali_gov: the G3D at 85.0 C: 455 MHz at most now',
+		'tmu: 12 sensors read; hottest big at 83.0 C; big1=83.0 big2=82.0 little5=66.0 g3d1=86.0 isp2=70.0'
 	].join('\n');
 
 	const parsed = parseLog(log);
@@ -1007,6 +1077,12 @@ function selfTest() {
 	if (parsed.cools.length !== 2) {
 		errors.push(`cooling lines: ${parsed.cools.length}, wanted 2`);
 	}
+	if (parsed.tmuLines.length !== 1) {
+		errors.push(`TMU summary lines: ${parsed.tmuLines.length}, wanted 1`);
+	}
+	if (a.maxTmuBig !== 83 || a.maxIsp !== 70) {
+		errors.push(`TMU big/ISP: ${a.maxTmuBig}/${a.maxIsp}, wanted 83/70`);
+	}
 	if (a.gpuMaxMhz !== 572 || a.maxG3d !== 86) {
 		errors.push(`GPU max MHz/G3D: ${a.gpuMaxMhz}/${a.maxG3d}, wanted 572/86`);
 	}
@@ -1029,7 +1105,7 @@ function selfTest() {
 		}
 		process.exit(1);
 	}
-	console.log('self-test: ok (4 state lines, 5 charger dumps, CNFG_09 900->500 mA, current 880->470 mA, input-limit finding, 3 fps lines, GPU floor at 572/455 MHz, G3D 86 C, big ceiling 1690 kHz, GPU cap 455 MHz)');
+	console.log('self-test: ok (4 state lines, 5 charger dumps, CNFG_09 900->500 mA, current 880->470 mA, input-limit finding, 3 fps lines, GPU floor at 572/455 MHz, G3D 86 C, big ceiling 1690 kHz, GPU cap 455 MHz, TMU big/ISP 83/70 C)');
 }
 
 /* ------------------------------------------------------------------------------------------------------------------ */

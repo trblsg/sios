@@ -663,11 +663,19 @@ and `temp big ... lit ... C`) and the `fps:` lines (GPU MHz, busy, G3D) at the s
 [docs/heat.md](docs/heat.md) has the control law, the measurements, the screen-off gap and the thresholds.
 
 The 0.88 A to 0.47 A report is about 900 mA to 500 mA at the hub's port (input current at about 5 V, not the
-battery gauge). A plain USB 2.0 port or cable is 475 mA input / 550 mA charge in the S9's device tree, and the
-`CNFG_09` code for 500 mA is `0x13`; 900 mA is `0x23`. A 500 mA input at 5 V is 2.5 W, which a screen-on S9 can use
-up, so the battery gets little while `CHG_DTLS` still says charging. If
-`CNFG_09` stays at `0x13`, the limit was there from boot; if it falls in 100 mA steps, the source/cable/port is
-sagging (AICL-style). HakiOS never writes either limit, so a hotplug does not re-apply the charger type.
+battery gauge). A hub rated 2 A normally offers a standard USB data port (SDP), which advertises 500 mA: the 2 A
+is the hub's capacity, not what the phone is allowed to draw. The S9's cable type 4 (`USB`) maps to 475 mA input /
+550 mA charge in its device tree (`current_group_12`), and the `CNFG_09` code for 500 mA is `0x13`; 900 mA is
+`0x23`. At 30% the cell is far from its CV phase, so 0.47 A is the port/register limit, not the battery asking
+for less. A 500 mA input at 5 V is 2.5 W, which a screen-on S9 can use up, so the battery gets little while
+`CHG_DTLS` still says charging. If `CNFG_09` stays at `0x13`, the limit was there from boot; if it falls in 100 mA
+steps, the source/cable/port is sagging (AICL-style). HakiOS never writes either limit, so a hotplug does not
+re-apply the charger type. With the screen off and the apps closed, the first suspects are the panel still
+scanning (no `panel_sleep=1`), no `CPU_SUSPEND`, and a background/SoC load; test unplugged vs plugged first. If
+the phone is hot unplugged too, the charger is not the source. If `panel_sleep=1` and `sleep_cores=1` are
+already on, the A55s/uncore/PMIC are next: test `sleep_cores=2` (after proving wake), Wi-Fi/Bluetooth off and
+the camera/ISP; if the center of the board is still hot, the fix is `CPU_SUSPEND`/cluster power-down, not another
+governor switch. [docs/heat.md](docs/heat.md) has the screen-off split;
 [docs/power-charging.md](docs/power-charging.md) has the decode table, the four cases, and how to capture a
 wall-charging log without charging from the PC's USB port.
 
