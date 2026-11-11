@@ -24,6 +24,49 @@ USERDATA as HFS Plus and sets `ufs_write=1 var_hfs=ufs_USERDATA_data`, so `/var/
 last across boots. With `/private/var` in RAM, `JB_KEPT_ONLY=1` means init does not graft `/var/jb` at all and
 `ipainstaller` is not there. **The `-U` installer erases Android's data in USERDATA.**
 
+## SafariViewService and Google sign-in
+
+Google's sign-in sheet in YouTube and Google Maps is not a web view inside the app: it runs in
+`SafariViewService`, a hidden system view service. Its entitlements carry
+`com.apple.private.security.container-required = com.apple.mobilesafari`, so it starts in
+MobileSafari's data container. On a first boot LaunchServices can register MobileSafari before that
+container exists and keep `/var/mobile` in its record; `SafariViewService` then has no container to
+start in, and native sign-in fails before Google's page loads.
+
+`prep.sh`, which `com.hakios.jbseed` runs after the prefix is at `/var/jb`, now checks both records.
+While either one is wrong it calls `uicache -p` for `/Applications/MobileSafari.app` and
+`/Applications/SafariViewService.app` -- the same repair that works by hand -- and retries for two
+minutes because LaunchServices can still be busy right after SpringBoard. On the first boot it asks
+SpringBoard to restart once after the repair (the prefix arrived after SpringBoard had read the
+database). Later boots only check, and repair a record that has gone wrong again; if
+`SafariViewService` had already started in that boot, a respring is still needed. No re-signing of
+`SafariViewService` and no change to its `container-required` entitlement is involved.
+
+To check the records by hand:
+
+```sh
+LC_ALL=C /var/jb/usr/bin/uicache -i com.apple.mobilesafari | grep -E 'Bundle Identifier|Container Path'
+LC_ALL=C /var/jb/usr/bin/uicache -i com.apple.SafariViewService | grep -E 'Bundle Identifier|Container Path'
+```
+
+Both must print the same `Container Path` under
+`/private/var/mobile/Containers/Data/Application/` (the UUID differs between installs). If
+MobileSafari prints `/var/mobile`, repair it and respring:
+
+```sh
+sudo /var/jb/usr/bin/uicache -p /Applications/MobileSafari.app
+sudo /var/jb/usr/bin/uicache -p /Applications/SafariViewService.app
+sudo /var/jb/usr/bin/killall SpringBoard
+```
+
+The boot-time repair says `prep.sh: safari's container recorded (try N)` on the console when it
+succeeds, and `prep.sh: safari's container could not be recorded` if LaunchServices stays busy for
+two minutes.
+
+A `/private/var/jb` that already exists is not replaced by a later system image, so a phone that
+already has a prefix from an older image does not get the boot-time check from the new image. The
+manual commands above are the repair there; a fresh install gets it automatically.
+
 ## Get a root shell
 
 `ipainstaller` writes to `/var/jb/Applications` and runs `chown`, so it must run as root. The prefix's `sudo` is

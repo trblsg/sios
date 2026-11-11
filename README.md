@@ -405,7 +405,9 @@ Ubuntu runner:
    lets the jailbreak prefix survive a boot. **This erases Android's data in USERDATA.**
 4. The prefix carries the Procursus bootstrap with Sileo. With `tweaks` on (the default) it also carries ElleKit
    and PreferenceLoader; in both cases it carries `ipainstaller` at `/var/jb/usr/bin/ipainstaller`
-   ([docs/IPA.md](docs/IPA.md)).
+   ([docs/IPA.md](docs/IPA.md)). Its first-boot `prep.sh` also repairs the MobileSafari/SafariViewService
+   container record that native Google sign-in in YouTube and Google Maps needs
+   ([docs/IPA.md](docs/IPA.md#safariviewservice-and-google-sign-in)).
 
 The artifact `scion-exynos9810-installer-format-userdata` is a 7z archive, AES-256 with its file names hidden. Its
 passphrase is the repository secret `INSTALLER_PASSPHRASE`, and the job refuses to run without it. The installer

@@ -12,3 +12,4 @@ __pycache__/
 firmware/*/*
 !firmware/*/README.md
 !firmware/*/SHA256SUMS
+.catdesk

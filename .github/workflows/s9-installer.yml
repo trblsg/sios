@@ -9,7 +9,8 @@
 #      persistent there (and Android's data in USERDATA is erased).
 #
 # The image carries the Procursus prefix with Sileo; with tweaks on (the default) ElleKit and PreferenceLoader,
-# and ipainstaller at /var/jb/usr/bin/ipainstaller (docs/IPA.md).
+# and ipainstaller at /var/jb/usr/bin/ipainstaller (docs/IPA.md). Its first-boot prep.sh also repairs the
+# MobileSafari/SafariViewService container record that native Google sign-in in YouTube and Google Maps needs.
 #
 # The installer carries iOS's own files. This repository is public, and any signed-in GitHub user can download
 # a public repository's artifacts. So the job uploads one 7z archive, AES-256 with its file names encrypted, with
@@ -224,6 +225,16 @@ jobs:
             export PREINSTALL="debianutils launchctl unzip ldid libplist3"
           fi
           tools/mk-jb.sh > "$W/mk-jb.log" 2>&1 || { tail -60 "$W/mk-jb.log"; exit 1; }
+          # SafariViewService's container-required names MobileSafari's data container.  A first
+          # boot's LaunchServices record can be made before that container exists and keep
+          # /var/mobile, which leaves Google's native sign-in sheet unable to start the view
+          # service.  prep.sh is run by jb_seed at every boot; the snippet repairs the record with
+          # uicache -p (the same call that fixes it by hand) and resprings once, on the first boot.
+          test -s devices/starlte/tools/prep-safari-container.sh
+          grep -q 'hakios: safari container repair' jb/root/var/jb/prep.sh ||
+            sed -i '1r devices/starlte/tools/prep-safari-container.sh' jb/root/var/jb/prep.sh
+          grep -q 'hakios: safari container repair' jb/root/var/jb/prep.sh
+          sh -n jb/root/var/jb/prep.sh
           sh -n devices/starlte/tools/ipainstaller
           install -m 0755 devices/starlte/tools/ipainstaller jb/root/var/jb/usr/bin/ipainstaller
           test -x jb/root/var/jb/usr/bin/ipainstaller
