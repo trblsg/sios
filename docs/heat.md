@@ -343,6 +343,12 @@ exynos_mfc: 3: mfc_fw.bin, 682192 bytes, from fw/ of the small image
 exynos_mfc: 3: the firmware runs: ...
 ```
 
+The build for that run is ready: `s9-installer` run #11 (id `43250249998`, 12 November 2026) built kernel
+`mfc-fw-image` at `28fd333c` with this device repository at `db83d83`, `partition=SYSTEM`,
+`userdata_blocks=starlte=13917184`, `time_limit=900`, and `boot_args=s6sy761_irq=1 brcmfmac_poll=0`. The installer is
+artifact `13961040707` on that run. Its boot args are `... mfc=5 ... s6sy761_irq=1 brcmfmac_poll=0; the run returns
+after 900 s.` The flash and the hardware log are still the missing measurement.
+
 **The reset was not the kernel's thermal stop.** `tmu_stop` is 110 C for three consecutive reads; the last `tmu:` line
 is 100.0 C at 739 s, and `cpufreq_gov` reported 101.0-102.0 C at 750-754 s. There is no `tmu: TOO HOT` line and no
 panic. The log ends in the middle of a line (`c`, the start of the next `cpufreq_gov` line), which is a hard reset:
