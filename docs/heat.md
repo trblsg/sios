@@ -4,9 +4,12 @@ Status: 12 November 2026. This page is the heat side of the "hot, and charging f
 report. The first log (12 November) was screen-on and charging and covers two minutes. The second one (the same day,
 "Second hardware result" below) is the first screen-off run: 755 s, the screen off for 4.5 minutes, Safari/YouTube
 after the wake, and a hard reset at 101-102 °C — but it was charging through the PC's 500 mA port with the console
-attached, so it is **not** the unplugged baseline. The measurements before it were made on the development phone
-("phone 2") on 5 November, and the constants are from the kernel tree as it is on 12 November. The charging side —
-`CNFG_09`, AICL, the CV taper and the four cases — is in [power-charging.md](power-charging.md).
+attached, so it is **not** the unplugged baseline. The third one ("Third hardware result") repeats the same shape
+with hardware video decode working: 900 s, peak 96.0 °C, and a return to the loader at 916 s. Its last lines are a
+panic in the console policy on the way out, not a thermal reset; the driver fix is described there. The measurements
+before these were made on the development phone ("phone 2") on 5 November, and the constants are from the kernel
+tree as it is on 12 November. The charging side — `CNFG_09`, AICL, the CV taper and the four cases — is in
+[power-charging.md](power-charging.md).
 
 ## The short answer
 
@@ -17,6 +20,7 @@ The S9 under HakiOS has several independent heat sources, and the kernel sees on
 | CPU, big cluster | `gov_policy=2` (the S9 default) keeps all four M3s online and allows 1794 MHz; the touch floor is 1469 MHz, the frame floor 1261 MHz while frames are moving | a ceiling that steps down from 83 °C, lowest level at 96 °C, back under 78 °C | `cpufreq_gov: ... big N MHz load N% ... temp big N C` |
 | CPU, little cluster | four A55s, floor 1053 MHz (core 0 runs the loader's UFS service and is not counted as load); touch floor 1248 MHz under the scion law | same ceiling law from 76 °C, back under 71 °C | the same line, `lit ...` |
 | GPU | `mali_gov=1`, 260/455/572 MHz; **572 MHz floor whenever a frame arrived in the last 100 ms**, even at 10 fps and low busy | 455 MHz at G3D 85 °C, 260 MHz at 95 °C; the floor is applied **before** the cap | `fps: ... gpu: ... MHz ... G3D N C`, `mali: GPU busy`, `mali: mali_gov: the G3D at ...` |
+| Video decode | without the MFC firmware, VideoToolbox decoded H.264/HEVC on the M3s (the VENDOR partition is EROFS, so step 3 failed) | `mfc=5` with `fw/mfc_fw.bin`: the MFC decodes, VideoToolbox registers `avc1` and `hvc1` | `exynos_mfc: 3:`, `hakios: mediaserverd: the MFC's decoder registered for 'avc1'` |
 | Panel | the S6E3HA8 keeps scanning and DSIM/DECON stay up; brightness is AOR dimming, not an off switch; no system sleep and no CPU_SUSPEND | nothing unless `panel_sleep=1`; `sleep_cores=1` only after screen off | `GenericARMPE: the display off/on`, `s6e3ha8: panel_sleep:` |
 | Charger / battery | 5 V input, `CNFG_09`/`CNFG_02`, a 2018 cell; the charger adds heat on top of the SoC | only the watchdog is ever written (`max77705_wdt=1`); no current limit is set | `max77705:` lines |
 | Radios, camera, sensor hub | Wi-Fi/BT on by default; the front camera is lazy since 5 November; `shub=6` | none | `exynos_camera: STREAM ON/OFF` |
@@ -325,7 +329,7 @@ charging** (`on a charger, not charging`), and by the end it was taking 177 mA *
 PC port cannot feed a screen-on S9 playing video; the cell buffers the difference and heats. That is a reason to run the
 next measurement unplugged (or on a 5 V/2 A source), not proof that the charger caused the reset.
 
-**Hardware video decode was absent.** The boot log has:
+**Hardware video decode was absent, then present.** The 755 s boot log has:
 
 ```
 ext4: VENDOR: cannot be read: not a file (or the partition is not ext2/3/4) (79)
@@ -333,21 +337,19 @@ exynos_mfc: 3: /firmware/mfc_fw.bin is not on the phone's VENDOR partition: no h
 ```
 
 The S9's VENDOR partition on Android 10 is EROFS, which the kernel's ext4 reader does not read, so MFC never started
-and VideoToolbox decoded in software. That is the largest avoidable heat source in a YouTube run, and it also explains
+and VideoToolbox decoded in software. That was the largest avoidable heat source in a YouTube run, and it also explains
 why the README's 4 November "hardware H.264/HEVC" result no longer reproduced. This tree now fetches `mfc_fw.bin`
 (682,192 bytes, sha256 `378f85ce...f368d4`) into `fw/` of the root image, and the MFC driver asks
-`hakios_image_file("fw", "mfc_fw.bin")` before the VENDOR partition. The next run has to confirm:
+`hakios_image_file("fw", "mfc_fw.bin")` before the VENDOR partition. The third result below confirmed it:
 
 ```
 exynos_mfc: 3: mfc_fw.bin, 682192 bytes, from fw/ of the small image
-exynos_mfc: 3: the firmware runs: ...
+exynos_mfc: 3: the firmware runs: its date 21-01-12 (kind E), the block's version 0x1200
+exynos_mfc: 4: 6 frames shown, 6 with the right CRC, of 6, in 10435 us (error 0)
 ```
 
-The build for that run is ready: `s9-installer` run #11 (id `43250249998`, 12 November 2026) built kernel
-`mfc-fw-image` at `28fd333c` with this device repository at `db83d83`, `partition=SYSTEM`,
-`userdata_blocks=starlte=13917184`, `time_limit=900`, and `boot_args=s6sy761_irq=1 brcmfmac_poll=0`. The installer is
-artifact `13961040707` on that run. Its boot args are `... mfc=5 ... s6sy761_irq=1 brcmfmac_poll=0; the run returns
-after 900 s.` The flash and the hardware log are still the missing measurement.
+VideoToolbox registered the decoder for `avc1` and `hvc1`, the first session was H.264 640x360, and by the end the
+controller had taken 567 interrupts with 0 missed.
 
 **The reset was not the kernel's thermal stop.** `tmu_stop` is 110 C for three consecutive reads; the last `tmu:` line
 is 100.0 C at 739 s, and `cpufreq_gov` reported 101.0-102.0 C at 750-754 s. There is no `tmu: TOO HOT` line and no
@@ -357,17 +359,105 @@ The battery was 47 C, below the 60 C `tmu_batt_stop`; the MAX98512s reported `BR
 ABOX was still moving 192 KB/s. Those are observations, not yet a proven cause; a loader/PMIC reset-reason register is
 the missing evidence.
 
-What to do next, one variable at a time:
+What was done next, one variable at a time (the third result below is step 1; step 4 is the run after it):
 
 1. **MFC first.** Build with this tree's `firmware/mfc/mfc_fw.bin` in `fw/`, boot args unchanged (`mfc=5` is already
    there), and repeat the same YouTube run. If the two `exynos_mfc: 3` lines appear, the CPU/GPU load and the
    temperature after 5-6 minutes are the measurement. Do not add `mfc_irq=1` in the same run; test it after MFC works.
+   **Done:** both lines appeared, VideoToolbox used the MFC, and the peak was still 96.0 °C; the further run is `abox=0`.
 2. **Do not use the PC port as the charger for the heat run.** Run unplugged from a cool start, or on a 5 V/2 A source.
    If the console must stay attached, say so in the result; the 500 mA port changes the battery term.
 3. **Screen-off baseline after settling.** Wait 10-15 minutes after boot, then lock. Add `panel_sleep=1` first, then
    `sleep_cores=1` in a later run; do not change both with MFC.
 4. **If MFC works but the phone still reaches ~95 C,** the next diagnostic is `abox=0` for one run (no audio) to size
-   the ABOX/amplifier term, then ABOX demand-stop. The GPU/display gating is after that.
+   the ABOX/amplifier term, then ABOX demand-stop. The GPU/display gating is after that. **This is the run after the
+   third result below.**
+
+### Third hardware result (12 November): MFC decodes, 96 °C, the return's last line
+
+This is the run the second result asked for: kernel `mfc-fw-image` at `28fd333c` (the device repository at
+`db83d83`), built by `s9-installer` run #11 (id `43250249998`, artifact `13961040707`) with `partition=SYSTEM`,
+`userdata_blocks=starlte=13917184`, `time_limit=900` and `boot_args=s6sy761_irq=1 brcmfmac_poll=0`. The running
+kernel is `g28fd333c`; its built-in and command-line arguments include `mfc=5` and `loader_return_after=900`. The
+cable was again the PC's 500 mA port, so this is still not the unplugged baseline.
+
+**MFC works on the phone.** The driver loaded the firmware from the small image, before the VENDOR partition:
+
+```
+exynos_mfc: 3: mfc_fw.bin, 682192 bytes, from fw/ of the small image
+exynos_mfc: 3: the firmware runs: its date 21-01-12 (kind E), the block's version 0x1200
+exynos_mfc: 4: 6 frames shown, 6 with the right CRC, of 6, in 10435 us (error 0)
+exynos_mfc: the interrupt, 388: attached (0)
+```
+
+`/dev/hakios-mfc` exists, and VideoToolbox uses it: `hakios: mediaserverd: the MFC's decoder registered for 'avc1' (0)`
+and `'hvc1' (0)`; the first session was `hakios: mfc: a H.264 session of 640x360, 2 parameter sets (0)`. By the end of
+the run the controller had taken `567` interrupts with `0` answers missed. The `mfc_irq` question is settled too: the
+interrupt was attached without that boot arg.
+
+**Touch and Wi-Fi stayed on their interrupt paths.** `gpa1-0` as SPI 44 took up to 544 IRQs a minute, with 69 touches,
+641 events and 1156 transfers; the Wi-Fi INTx handled 74,874 interrupts and never fell back to the poller.
+
+| Uptime | What happened | BIG / LITTLE | Notes |
+|---|---|---|---|
+| 207-208 s | lock (`Set Blanked: YES`) | 66.0 / 64.6 C | `panel_sleep` was not set, so the panel and DSIM/DECON stayed up |
+| 208-444 s | screen off | 64-67 / 62.6-65.6 C | M3 650 MHz, asked load 6-15%; 0 touches, 0 frames; battery 39.6 C, 99.90%, "on a charger, not charging" |
+| 444-450 s | wake, Safari | 92.0 / 85.0 C at 450 s | the ceiling steps down from 83 C; the load jumps in the first seconds |
+| 460-490 s | Safari | 80-84 / 78-80 C | M3 650 MHz, 70-100% busy; H.264 on the MFC from 491 s |
+| 491-890 s | YouTube | 82-95 / 78-92 C | M3 650 MHz, 70-100% load; A55 455 MHz, up to 87% asked; GPU only 10% busy, G3D 69-76 C |
+| 820-860 s | the hot band | 94.0-96.0 / 91.1-92.1 C | M3 650 MHz, 68-100% busy; A55 455 MHz, 0-87% asked |
+| 832 s | peak | **96.0 C** | the lowest M3 rate, the lowest A55 rate |
+| 916 s | timed return | - | `loader_return_after=900`; no hard reset |
+
+**The result is about 6 °C cooler than the 755 s run, and still hot.** The previous run peaked at 101-102 °C and ended
+in a hard reset; this one peaked at 96.0 °C and reached the loader. Hardware decode removed the software-decode term,
+but it did not remove the load: with the MFC working, the four M3s still sat at their 650 MHz floor at 70-100% busy
+and the A55s at 455 MHz with up to 87% asked, while the GPU was only 10% busy. The remaining heat is in the CPU's copy/hand-off
+path, the uncore and ABOX, not in the GPU and not in software video decode. The battery went from 99.90%/39.6 C to
+99.64%/43.5 C and was taking 59 mA **from** the cell at the end; the PC port cannot feed this load.
+
+**The panic at the end was the console policy on the way out, not a thermal reset.** The log has, after
+`--- loader_return_after expired ---` and the driver teardown:
+
+```
+--- panic on MPIDR 0x0000000000000200: Console I/O from interrupt-disabled context @serial_console.c:168
+--- the last exception: ESR_EL1 0x0000000056000080 FAR_EL1 0x0000000100be4000 ELR_EL1 0xfffffff007485d88
+--- panic() called from
+  0xfffffff00742d144
+```
+
+The last driver line before it is `abox: at the run's end: RDMA0 stopped (1 us), UAIF1's SPK_ENABLE off`. The loader
+still got control (`--- loader_return() from 0xfffffff0072d8818, unslid 0xfffffff0072d8818 ---`), and the TMU never
+said `TOO HOT`; this is a bug in the way out, not the reason the run ended.
+
+The cause is in `drivers/core/hakios.platform.c`: `hakios_say()` wrote each line to `loader_log_line()` (so it appears
+in the loader's log) and then called `printf()` unconditionally. `loader_return()` calls `psci_smp_stop_others()`
+first, which sets `DAIFSet` for all interrupts, so every quiesce step runs with interrupts off; `printf()` from that
+context enters `console_io_allowed()` and panics. The UFS quiesce lines survive because they use `hc_say_late()` (the
+loader's log only), and the MAX98512 quiesce printed nothing because no amplifier was playing. The `abox` line is the
+first `hakios_say()` in that state.
+
+The fix is branch `console-irq-guard`, commit `eaf877f3` on `trblsg/s-kernel` (based on `mfc-fw-image`): `hakios_say()`
+always writes `loader_log_line()` and calls `printf()` only when `ml_get_interrupts_enabled()`, exactly as `tell()` in
+`hakios.cpufreq.c` and the haptic, torch and camera drivers already do. The line still reaches the log the loader
+gets back; only the kernel console copy is skipped. The next build includes it.
+
+The panic frames cannot be named from the checked-in `prebuilt/hakios-kernel`: that binary says
+`Darwin Kernel Version 22.5.0: Sun Oct 25 22:52:46 PDT 2026`, while this run's kernel is the 12 November build
+(`Thu Nov 12 15:47:18 UTC 2026`), so its layout does not match. Keep the unstripped kernel of the next build with the
+log.
+
+What to run next, one variable at a time:
+
+1. **Rebuild with `console-irq-guard` and `abox=0`, same `time_limit=900`.** Boot args:
+   `s6sy761_irq=1 brcmfmac_poll=0 abox=0` (the build keeps `mfc=5` and `loader_return_after=900`). Confirm the return
+   is clean: the `--- loader_return()` banner with no panic before it.
+2. Compare the 208-444 s screen-off band and the 491-890 s YouTube band with this run. If `abox=0` removes the centre
+   heat, implement ABOX demand-stop; if it does not, the remaining terms are the CPU copy path and the uncore.
+3. After that, the screen-off test: `panel_sleep=1` first, `sleep_cores=1` in a later run, after 10-15 minutes of
+   settling, unplugged or on a 5 V/2 A source.
+4. If the remaining CPU load tracks MFC frame copying, test `mfc_zc=1` in a run of its own; do not combine it with
+   `abox=0`.
 
 ### Two orders, not one
 
@@ -394,7 +484,8 @@ The low-risk implementation order is different:
    `s6sy761_irq=1`: SPI 44/INTID 76, 197-806 IRQs a minute under use, no poller fallback).
 3. BT UART IRQ: UART RX/SPI 422, `BT_WAKE`/`BT_HOST_WAKE`, poll fallback.
 4. Sensor `HOST_REQ` IRQ: `gpa1-7`, level-high acknowledge, poll fallback.
-5. ABOX demand-stop/AUD gating; the DMA IRQ only after that.
+5. ABOX demand-stop/AUD gating; the DMA IRQ only after that. This is the next measurement (`abox=0`), and the fix
+   after it if the centre cools.
 6. GPU screen-off idle gating; OPP voltage after the ASV/fvmap table.
 7. Radio power-save: Wi-Fi power save, BT low-power; `bt=0 wifi_pcie=0` only as a diagnostic.
 8. A55 floor test: `cpufreq_gov_lit_min=949000`, then `832000`, not 598; watch UFS latency.
@@ -489,13 +580,14 @@ In order, without a kernel patch:
    the 2 ms poller; the INTx path is SPI 253 from `brcmfmac=5`.
 8. **A55 floor:** `cpufreq_gov_lit_min=949000`, then `832000`. Do not start at 598000: core 0 runs the loader's
    UFS service, and a too-low floor can cost more time (and heat) in UFS waits than it saves.
-9. **ABOX diagnostic:** `abox=0` for one screen-off run (no audio). If the centre cools, the step 8 pipeline
-   is a source; do not keep it off if the phone needs audio. iOS may retry its audio service, so judge the
-   run by the `tmu:` zones, not by the case temperature.
+9. **ABOX diagnostic:** `abox=0` for one run (no audio) with the `console-irq-guard` kernel, same `time_limit=900`.
+   If the centre cools, the step 8 pipeline is a source; do not keep it off if the phone needs audio. iOS may retry
+   its audio service, so judge the run by the `tmu:` zones, not by the case temperature.
 
-The one heat lever that is not a boot arg is hardware video decode: the image must carry `fw/mfc_fw.bin`, and the
-MFC driver now asks for it before VENDOR (step 3). With `mfc=5`, YouTube should stop decoding on the CPU; verify the
-`exynos_mfc: 3` lines before judging the temperature.
+The one heat lever that is not a boot arg is hardware video decode: the image carries `fw/mfc_fw.bin`, and the MFC
+driver asks for it before VENDOR (step 3). With `mfc=5`, YouTube no longer decodes on the CPU: the third result has
+the firmware line, the 6/6 decoded frames, and VideoToolbox registering `avc1`/`hvc1`. The phone is still hot, so the
+MFC is no longer the open question.
 
 `max77705_wdt=1` is still needed for a charger that stops after five minutes, but it is not a heat fix.
 `max77705_diag=1` and `max77705_fg_s=30` only read the chip.
