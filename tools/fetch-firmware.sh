@@ -1,6 +1,5 @@
 #!/bin/bash
 # Put the Galaxy S9's vendor firmware into firmware/<kind>/, where userland/build.sh (DEVICE=starlte) takes it from.
-#
 # The files are Samsung's and Broadcom's and are NOT kept in this repository (only their sha256 sums are: the
 # SHA256SUMS of each firmware/ directory). This script gets exactly the files those sums name, from one of
 #
@@ -9,7 +8,7 @@
 #      vendor tree. DIR is searched recursively by file name; a file whose sum is not the pinned one is ignored.
 #   2. else the public community vendor trees, at the pinned commits below (GitHub, no login):
 #        ExyHyperBrick/proprietary_vendor_samsung_starlte            (the audio DSP's images)
-#        ExyHyperBrick/proprietary_vendor_samsung_exynos9810-common  (Wi-Fi, Bluetooth, DSM, the codec's DSP)
+#        ExyHyperBrick/proprietary_vendor_samsung_exynos9810-common  (Wi-Fi, Bluetooth, DSM, MFC, the codec's DSP)
 #        ExyHyperBrick/android_kernel_samsung_exynos9810             (Samsung's GPL kernel: the sensor hub's image,
 #                                                                      as hex in a header file, turned into bytes here)
 #
@@ -76,7 +75,7 @@ origin() {
 	calliope_sram.bin|calliope_dram.bin|calliope_iva.bin|dsm_tune.bin)
 		echo "$STARLTE_REPO $STARLTE_REV proprietary/vendor/firmware/$1" ;;
 	dsm.bin|cs47l92-dsp1-trace.wmfw|bcm4361B2_murata.hcd|bcm4361B2_semco.hcd|bcmdhd_clm.blob|bcmdhd_sta.bin_b0|\
-	bcmdhd_sta.bin_b2|nvram.txt_murata_r041_b2|nvram.txt_r02a_b2|nvram.txt_r02b_b2)
+	bcmdhd_sta.bin_b2|nvram.txt_murata_r041_b2|nvram.txt_r02a_b2|nvram.txt_r02b_b2|mfc_fw.bin)
 		echo "$COMMON_REPO $COMMON_REV proprietary/vendor/firmware/$1" ;;
 	*) return 1 ;;
 	esac
@@ -171,7 +170,8 @@ The vendor firmware is not stored in this repository. Either
     package) and, for the sensor hub, bcm_sensorhub_a1.bin or Samsung's kernel header $(basename "$KERNEL_HDR").
     Only files with exactly the pinned sums are taken: the sums are of the LineageOS 24 vendor build of the S9,
     and a phone on another firmware build may carry other bytes under the same names. (Without a file in
-    fw/ of the image the Wi-Fi, Bluetooth and sensor drivers read the phone's own VENDOR partition at run time, ufs=2.)
+    fw/ of the image the Wi-Fi, Bluetooth, sensor and MFC drivers read the phone's own VENDOR partition at run time, ufs=2;
+    the MFC firmware cannot be read there when VENDOR is EROFS.)
 EOF
 	exit 1
 fi

@@ -1,11 +1,12 @@
 # Heat on the Galaxy S9
 
 Status: 12 November 2026. This page is the heat side of the "hot, and charging fell from 0.88 A to 0.47 A"
-report. **There is still no screen-off heat log from that phone**: the first log (12 November) was screen-on
-and charging and covers two minutes, and nothing else below was measured on it. The measurements were made on
-the development phone ("phone 2") on 5 November, and the constants are from the kernel tree as it is on
-12 November. The charging side — `CNFG_09`, AICL, the CV taper and the four cases — is in
-[power-charging.md](power-charging.md).
+report. The first log (12 November) was screen-on and charging and covers two minutes. The second one (the same day,
+"Second hardware result" below) is the first screen-off run: 755 s, the screen off for 4.5 minutes, Safari/YouTube
+after the wake, and a hard reset at 101-102 °C — but it was charging through the PC's 500 mA port with the console
+attached, so it is **not** the unplugged baseline. The measurements before it were made on the development phone
+("phone 2") on 5 November, and the constants are from the kernel tree as it is on 12 November. The charging side —
+`CNFG_09`, AICL, the CV taper and the four cases — is in [power-charging.md](power-charging.md).
 
 ## The short answer
 
@@ -283,6 +284,85 @@ Thermal pressure is still a mitigation, not a heat source: `userland/src/thermal
 `kern.hakios.temp.*` and the `thermal_*` sensor values, so `thermald` exits and iOS stays nominal. This matters
 under load; it does not cool an idle, screen-off phone.
 
+### Second hardware result (12 November): screen off, YouTube, reset
+
+The next run used the same phone, kernel `g85ddcb1b` (branch `irq-fallback`) and
+`... s6sy761_irq=1 brcmfmac_poll=0`, with `mfc=5` but **without** `panel_sleep` or `sleep_cores`. The sequence was:
+boot, join Wi-Fi, lock the screen at 172 s, wake at 439 s, open Safari at 443 s, play YouTube, and let it run until
+the phone reset at 755 s. The console cable was also the charger (the PC's 500 mA port).
+
+**The two IRQ conversions passed.** Touch attached `gpa1-0` as SPI 44 (INTID 76), level low, at step 6; the per-minute
+lines show 197, 558 and up to 806 IRQs, with 94 touches / 1274 events / 1818 transfers and 2 failed in the busiest
+minute, and no fallback to the 4 ms poller. Wi-Fi INTx was unchanged: SPI 253 (INTID 285), `brcmf_pcie_intr` called,
+station joined 233 ms after connect.
+
+| Uptime | What happened | BIG / LITTLE / G3D | Notes |
+|---|---|---|---|
+| 0-3 s | boot | 52 -> 75 / 68 / 58 C | the usual boot spike |
+| 42-127 s | screen on, idle | 70 / 68.7 / 68 C | charging; battery 41-42 C |
+| 127-150 s | foreground burst | 77 -> 95 / 72.7 -> 83.9 / 68 -> 78 C | the clocks drop to 650/455 by 160 s |
+| 172 s | lock (`Set Blanked: YES`) | - | `LCD On_Off 1` still, because `panel_sleep` was not set |
+| 185-435 s | screen off | 77-81 (86 once at 317 s) / 73.8-76.8 / 73-74 C | 0 touches, 0 frames; battery 43-44 C |
+| 439-442 s | wake, Safari | 83 -> 90 / 76.8 -> 82.9 / 74 -> 80 C | the load jumps in the first second |
+| 496 s | G3D at 85 C | 90 / 86 / 84 C | GPU capped at 455 MHz |
+| 556-569 s | YouTube | 95 / 91 / 89 C | battery 46 C |
+| 629 s | YouTube | 98 / 94 / 92 C | |
+| 739-755 s | YouTube, then reset | 100 -> 102 / 96-98 / 94 C | M3 650 MHz, A55 455 MHz, GPU 260 MHz from 751 s |
+
+The screen-off period is **not an idle floor**: the four M3s were about 38-40% busy each (`sum big` 150-158%) at
+962-1469 MHz, while the A55s were at 1%. The log does not name the process, but the pattern is post-boot background
+work — `wifid` link-quality calls, the sensor hub and launchd/XPC churn — so the first 10-15 minutes after boot are not
+a baseline. The 80 C screen-off reading is therefore "awake with a dark screen and iOS still working", not "idle".
+
+**The frequency levers were already exhausted when the heat arrived.** From 450 s the M3s were at their 650 MHz floor
+and the A55s at 455 MHz; the GPU was capped at 455 MHz from 496 s and at 260 MHz from about 751 s. A phone at 100-102 C with
+every clock at its floor is heating through the uncore, ABOX, the display pipeline, the charger and software video
+decode, not through CPU frequency.
+
+**The battery reading was temperature, not charge.** The TMU's `battery=39 ... 47` is the cell's temperature in C.
+The gauge put the state of charge at 99.57% early and 99.23% at the end: the phone was on the charger but **not
+charging** (`on a charger, not charging`), and by the end it was taking 177 mA **from** the battery at 46.7 C. A 500 mA
+PC port cannot feed a screen-on S9 playing video; the cell buffers the difference and heats. That is a reason to run the
+next measurement unplugged (or on a 5 V/2 A source), not proof that the charger caused the reset.
+
+**Hardware video decode was absent.** The boot log has:
+
+```
+ext4: VENDOR: cannot be read: not a file (or the partition is not ext2/3/4) (79)
+exynos_mfc: 3: /firmware/mfc_fw.bin is not on the phone's VENDOR partition: no hardware video
+```
+
+The S9's VENDOR partition on Android 10 is EROFS, which the kernel's ext4 reader does not read, so MFC never started
+and VideoToolbox decoded in software. That is the largest avoidable heat source in a YouTube run, and it also explains
+why the README's 4 November "hardware H.264/HEVC" result no longer reproduced. This tree now fetches `mfc_fw.bin`
+(682,192 bytes, sha256 `378f85ce...f368d4`) into `fw/` of the root image, and the MFC driver asks
+`hakios_image_file("fw", "mfc_fw.bin")` before the VENDOR partition. The next run has to confirm:
+
+```
+exynos_mfc: 3: mfc_fw.bin, 682192 bytes, from fw/ of the small image
+exynos_mfc: 3: the firmware runs: ...
+```
+
+**The reset was not the kernel's thermal stop.** `tmu_stop` is 110 C for three consecutive reads; the last `tmu:` line
+is 100.0 C at 739 s, and `cpufreq_gov` reported 101.0-102.0 C at 750-754 s. There is no `tmu: TOO HOT` line and no
+panic. The log ends in the middle of a line (`c`, the start of the next `cpufreq_gov` line), which is a hard reset:
+the SoC's own TMU trip (RISE7 is 115 C), the PMIC, or the watchdog. The loader then restarts into recovery by design.
+The battery was 47 C, below the 60 C `tmu_batt_stop`; the MAX98512s reported `BROWNOUT` at 724.5 s and 754.5 s while
+ABOX was still moving 192 KB/s. Those are observations, not yet a proven cause; a loader/PMIC reset-reason register is
+the missing evidence.
+
+What to do next, one variable at a time:
+
+1. **MFC first.** Build with this tree's `firmware/mfc/mfc_fw.bin` in `fw/`, boot args unchanged (`mfc=5` is already
+   there), and repeat the same YouTube run. If the two `exynos_mfc: 3` lines appear, the CPU/GPU load and the
+   temperature after 5-6 minutes are the measurement. Do not add `mfc_irq=1` in the same run; test it after MFC works.
+2. **Do not use the PC port as the charger for the heat run.** Run unplugged from a cool start, or on a 5 V/2 A source.
+   If the console must stay attached, say so in the result; the 500 mA port changes the battery term.
+3. **Screen-off baseline after settling.** Wait 10-15 minutes after boot, then lock. Add `panel_sleep=1` first, then
+   `sleep_cores=1` in a later run; do not change both with MFC.
+4. **If MFC works but the phone still reaches ~95 C,** the next diagnostic is `abox=0` for one run (no audio) to size
+   the ABOX/amplifier term, then ABOX demand-stop. The GPU/display gating is after that.
+
 ### Two orders, not one
 
 Heat impact for the screen-off, unplugged, centre-hot case is not the same as implementation risk:
@@ -304,7 +384,8 @@ The low-risk implementation order is different:
 
 1. Wi-Fi INTx: done and validated on the phone (12 November, `brcmfmac=8 brcmfmac_poll=0`); the polling
    fallback is in the driver.
-2. Touch IRQ: `gpa1-0`, threaded handler, poll fallback; implemented (`s6sy761_irq=1`), not yet run on hardware.
+2. Touch IRQ: `gpa1-0`, threaded handler, poll fallback; implemented and validated on the phone (12 November,
+   `s6sy761_irq=1`: SPI 44/INTID 76, 197-806 IRQs a minute under use, no poller fallback).
 3. BT UART IRQ: UART RX/SPI 422, `BT_WAKE`/`BT_HOST_WAKE`, poll fallback.
 4. Sensor `HOST_REQ` IRQ: `gpa1-7`, level-high acknowledge, poll fallback.
 5. ABOX demand-stop/AUD gating; the DMA IRQ only after that.
@@ -406,6 +487,10 @@ In order, without a kernel patch:
    is a source; do not keep it off if the phone needs audio. iOS may retry its audio service, so judge the
    run by the `tmu:` zones, not by the case temperature.
 
+The one heat lever that is not a boot arg is hardware video decode: the image must carry `fw/mfc_fw.bin`, and the
+MFC driver now asks for it before VENDOR (step 3). With `mfc=5`, YouTube should stop decoding on the CPU; verify the
+`exynos_mfc: 3` lines before judging the temperature.
+
 `max77705_wdt=1` is still needed for a charger that stops after five minutes, but it is not a heat fix.
 `max77705_diag=1` and `max77705_fg_s=30` only read the chip.
 
@@ -421,8 +506,8 @@ changes behaviour on a phone that is already hot.
   the main source, and a measurement of the same workload with and without it.
 - **IRQ conversions for the five pollers.** Touch `gpa1-0`, Wi-Fi INTx SPI 253, the BT UART/SPI 422, the sensor
   `HOST_REQ` gpa1-7 and ABOX's RDMA0. Each needs a threaded handler, a level/edge rule and a fallback to the
-  existing poll. Wi-Fi is done (`brcmfmac_poll=0`, with the poller as its fallback); touch is implemented
-  behind `s6sy761_irq=1`; the other three are still polled.
+  existing poll. Wi-Fi is done (`brcmfmac_poll=0`, with the poller as its fallback); touch is implemented and
+  validated on the phone behind `s6sy761_irq=1`; the other three are still polled.
 - **ABOX demand-stop.** After a silence grace period, stop RDMA0, UAIF1 and the Q-channels and power the AUD
   domain down; on the first iOS frame, re-prime the ring and start the path again. The amplifiers already stop
   after 3 s; the pipeline does not. This is the smaller change than a new DMA interrupt, and the audio start
@@ -469,6 +554,7 @@ changes behaviour on a phone that is already hot.
 | GPU frame floor | 572 MHz while a frame arrived within 100 ms | `mali_gov_frame`, `GOV_FRAME_MS` |
 | GPU caps | 455 MHz from 85 °C, 260 MHz from 95 °C, 5 °C hysteresis | `GOV_CAP1_MC`, `GOV_CAP2_MC`, `GOV_HYST_MC` |
 | TMU stop | 110 °C SoC, 60 °C battery, three readings | `tmu_stop`, `tmu_batt_stop` |
+| MFC firmware | 682,192 bytes, `fw/mfc_fw.bin`; sha256 `378f85ce...f368d4`; `fw/` first, VENDOR as fallback | `firmware/mfc/SHA256SUMS`, `hakios.exynos_mfc.c` |
 | Battery events | 46 °C charger high, 50 °C high event, 60 °C stop | `battery_data_starlte_common.dtsi`, `tmu_batt_stop` |
 | Panel / sleep | no system sleep; WFI; panel sleeps only with `panel_sleep=1`; `sleep_cores=1` (M3) / `2` (M3+A55) are opt-in PSCI `CPU_OFF` after 10 s, not `CPU_SUSPEND` | kernel `docs_screen-off-power.md` |
 
