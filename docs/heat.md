@@ -8,8 +8,8 @@ attached, so it is **not** the unplugged baseline. The third one ("Third hardwar
 with hardware video decode working: 900 s, peak 96.0 °C, and a return to the loader at 916 s. Its last lines are a
 panic in the console policy on the way out, not a thermal reset; the driver fix is described there. The fourth
 ("Fourth hardware result") is the console fix with `abox=0`: 601 s of log, 88 °C in the video band, within 1-2 °C of
-the third run, so `abox=0` changed nothing measurable, and the log ends before the 900 s return with no explanation
-yet. The measurements
+the third run, so `abox=0` changed nothing measurable; the owner stopped the capture at 601 s, so the 900 s return is
+still unchecked. The measurements
 before these were made on the development phone ("phone 2") on 5 November, and the constants are from the kernel
 tree as it is on 12 November. The charging side — `CNFG_09`, AICL, the CV taper and the four cases — is in
 [power-charging.md](power-charging.md).
@@ -477,22 +477,24 @@ not the term to chase: with it off, the four M3s still sit at 650 MHz at 2.1-3.5
 212-354%) and the A55s at 455 MHz. The heat is the video pipeline on the CPU, the MFC frame hand-off and the uncore,
 not the audio DSP.
 
-**The end at 601 s is unexplained.** The last line is complete, the sensors are still ticking at 601 s, and there is no
-`--- loader_return_after expired ---` (900 s had not arrived), no panic and no new loader banner. That is either the
-capture being stopped or the console dropping; a hard reset re-enumerates the USB port and PuTTY stops logging the same
-way. Only the owner can say which. The old capture ended mid-line at 849 s, which is what a stopped or dropped capture
-looks like; this one ends on a line boundary, which fits a USB drop or a reset.
+**The end at 601 s was the capture being stopped, not a reset.** The owner confirmed it. The last line is complete, the
+sensors are still ticking at 601 s, and there is no `--- loader_return_after expired ---` (900 s had not arrived), no
+panic and no new loader banner. The old capture ended mid-line at 849 s, the same signature of a stopped capture. The
+phone did not reset; the run was cut short, so the console fix's clean return at 900 s is still unverified.
 
 What to run next, one variable at a time:
 
-1. **Answer the 601 s question first.** If the phone reset, keep this log: it is a new symptom, not the heat, and the
-   next boot's loader log is the evidence. If the capture was stopped, rerun the same build and arguments for the full
-   900 s and confirm the clean `--- loader_return()` banner with no panic.
-2. **`mfc_zc=1` on the `abox=0` baseline**, in a run of its own: `abox=0 mfc_zc=1`, same `time_limit=900`. The one
-   earlier zero-copy run had wrong frames, so check the picture before trusting the temperature: `mfc_vt` at full speed
-   and the test page's frame count first. The target is the 250 IOSurfaces/133 MB and 314 refills a second (about
-   80 MB/s) the GL layer reports and the 171 GL calls/24 draws at 30 ms; the kernel's own `frame_out` copyout is only
-   about 10 MB/s, so the GL layer's refills are the bigger number to watch.
+1. **Next build: `console-irq-guard` head `fa4ced23`, `abox=0 mfc_zc=1`, `time_limit=900`.** The head adds
+   `/redwood/bin/cputop 5 &` to the demo job list, so every run now logs `cputop: N s: ...% in all: <process> ...%`
+   every 5 s; the heat runs need the owner of the 2-3 cores the `cpufreq_gov` line reports. This one run does three
+   things: the first full 900 s return (the console fix), the zero-copy copy-path test, and the per-process
+   attribution. Check the picture before trusting the temperature: the one earlier zero-copy run had wrong frames, so
+   `mfc_vt` at full speed and the test page's frame count first. If the frames are wrong, the return still answers the
+   console question; park zero-copy and keep the cputop lines.
+2. **If zero-copy is wrong or does not move the temperature**, the remaining screen-on terms are the GL layer's 314
+   refills a second (about 80 MB/s) and its 171 GL calls/24 draws at 30 ms, the MFC frame hand-off and the uncore. The
+   cputop line says which process owns the cores; use it before another driver change. The kernel's own `frame_out`
+   copyout is only about 10 MB/s, so it is not the big term by itself.
 3. **The screen-off test** stays next for the unplugged case: `panel_sleep=1` first, `sleep_cores=1` in a later run,
    after 10-15 minutes of settling, unplugged or on a 5 V/2 A source.
 4. **Do not combine** `mfc_zc` with `panel_sleep`/`sleep_cores`; one variable per run.
