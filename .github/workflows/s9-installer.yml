@@ -23,7 +23,7 @@ on:
   workflow_dispatch:
     inputs:
       kernel_ref:
-        description: Scion-Project/scion-kernel branch, tag or commit
+        description: trblsg/s-kernel branch, tag or commit
         default: main
       packaging_ref:
         description: Scion-Project/scion-installer branch, tag or commit
@@ -92,7 +92,8 @@ jobs:
           KERNEL_REF: ${{ inputs.kernel_ref }}
           PACKAGING_REF: ${{ inputs.packaging_ref }}
         run: |
-          git clone -q --filter=blob:none https://github.com/Scion-Project/scion-kernel.git "$W/k"
+          # the fork carries the IRQ work (irq-fallback); upstream is Scion-Project/scion-kernel
+          git clone -q --filter=blob:none https://github.com/trblsg/s-kernel.git "$W/k"
           git -C "$W/k" checkout -q "$KERNEL_REF"
           git clone -q --filter=blob:none https://github.com/Scion-Project/scion-installer.git "$W/pkg"
           git -C "$W/pkg" checkout -q "$PACKAGING_REF"
