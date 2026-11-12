@@ -1,9 +1,10 @@
 # Heat on the Galaxy S9
 
-Status: 10 November 2026. This page is the heat side of the "hot, and charging fell from 0.88 A to 0.47 A"
-report. **There is no heat log from that phone yet**: nothing below was measured on it. The measurements were
-made on the development phone ("phone 2") on 5 November, and the constants are from the kernel tree as it is
-on 10 November. The charging side — `CNFG_09`, AICL, the CV taper and the four cases — is in
+Status: 12 November 2026. This page is the heat side of the "hot, and charging fell from 0.88 A to 0.47 A"
+report. **There is still no screen-off heat log from that phone**: the first log (12 November) was screen-on
+and charging and covers two minutes, and nothing else below was measured on it. The measurements were made on
+the development phone ("phone 2") on 5 November, and the constants are from the kernel tree as it is on
+12 November. The charging side — `CNFG_09`, AICL, the CV taper and the four cases — is in
 [power-charging.md](power-charging.md).
 
 ## The short answer
@@ -46,7 +47,8 @@ loop. It also prints a warning when a zone passes the point where Android would 
 The CPU governor (`drivers/power/hakios.exynos_cpufreq.c`) is the control loop:
 
 - it measures each core's idle time every 40 ms and asks for the rate at which the busiest core would be 60%
-  busy, rounded up; up at once, down after 300 ms to the highest rate any of those windows wanted;
+  busy, rounded up; up at once, down after 200 ms (five 40 ms windows) to the highest rate any of those
+  windows wanted;
 - every second, a zone at its control point or above loses one ceiling level: BIG from 83 °C, LITTLE from
   76 °C; the ceiling reaches the cluster's lowest level at 96 °C; it regains one level a second only once the
   zone is 5 °C under its control point (under 78 °C for BIG, under 71 °C for LITTLE);
@@ -186,6 +188,10 @@ row. Do not try `sleep_cores=2`, radios off and the camera in separate blind run
 of them matters. The sensor hub is appended too (`shub=6`); `shub=0` turns it off for a test, but iOS may
 retry its services, which adds CPU load, so judge that run by the `tmu:` zones, not by the case temperature.
 
+At the console, before `log`, type `abox`, `sensors` and `bt`: each prints its live state (RDMA/UAIF/amps,
+the sensor list and rates, the chip and tty). Also keep the `fps:` lines after the display-off event and the
+startup `mali: 2: ACPM: BUCK6` line; they separate the display/GPU cases from ABOX and the radios.
+
 The console is the phone's USB-C port as a CDC-ACM serial device (1209:0001), not the iOS Console app, not
 Xcode, not SSH. On Windows it is a `USB Serial Device (COMx)`; open it in PuTTY or Tera Term at 115200 8N1
 and type `log` (README.md, "USB: the whole log and a console over the cable"). The cable also charges the
@@ -196,6 +202,118 @@ If big, little, G3D and ISP are all under their cooling points with the M3s and 
 still very hot, the remaining heat is the SoC uncore, the display pipeline or the PMIC. The boot-arg fixes are
 then exhausted; the next step is the kernel's `CPU_SUSPEND`/cluster power-down work (below, "What is not
 implemented"), not another governor switch.
+
+## The polling layer, ABOX and the GPU rail (11 November)
+
+A second read of the drivers found five periodic pollers that are on by default. They are real, but their
+sum is an idle tax, not proof by itself that the centre of the board is hot:
+
+| Block | File | Period | Approx. | When it runs |
+|---|---|---|---|---|
+| Touch S6SY761 | `drivers/input/touch/hakios.s6sy761.c` | `POLL_MS 4` | 250/s | after step 6; thread priority 92; `gpa1-0` is an active-low IRQ pin, not used |
+| Wi-Fi | `wifi/lx/brcmfmac/lx_pci.c` | `brcmfmac_poll_ms` 2 | 500/s | only with `brcmfmac_poll=1`; the INTx path is SPI 253 from `brcmfmac=5` |
+| Bluetooth | `drivers/bluetooth/bcm4361/hakios.bcm4361_bt.c` | 1 ms idle | 1,000/s | `bt=7` publishes the tty; `bt_tty_pump` wakes even when no byte moves |
+| Sensor hub | `drivers/input/ssp/hakios.ssp.c` | `idle_us=4000` | 250/s | `shub=6`; `HOST_REQ` gpa1-7 is a level-high IRQ, polled; six sensors at 20 ms, slow ones at 200 ms |
+| ABOX | `drivers/audio/abox/hakios.exynos_abox.c` | `POLL_MS 2` | 500/s | `abox=8`; step 8 `stream_run()` never returns |
+
+The aggregate is about 2,500 checks/s, before the 40 ms CPU governor, the 1 s TMU, the 30 s gauge, user-space
+timers and the display's frame thread. At roughly 10-20 us a wake, that is about 2.5-5% of one core,
+plus cache/uncore effects. It is not enough, by itself, to explain a hot mainboard centre; if `lit` and `big`
+are near idle in the log and the centre is still hot, the candidates are ABOX, DECON/DSIM, the GPU domain/BUCK6
+and the SoC uncore/PMIC, not the pollers alone.
+
+What the pollers do mean:
+
+- they keep the A55s and the uncore out of deeper idle, and they are cheap to remove;
+- a touch IRQ also cuts touch latency from up to 4 ms to the IRQ latency; it removes the AP's poll, not the
+  controller's own scan (the driver leaves it in `SENSE_ON`), which is a separate low-power/tap-to-wake change;
+- the Wi-Fi INTx is a boot arg (`brcmfmac_poll=0`), and the driver now falls back to the 2 ms poller when the
+  line cannot be attached (`wifi/lx/brcmfmac/lx_pci.c`), so `brcmfmac_poll=0` cannot leave Wi-Fi dead; on the
+  S9 the line attaches (SPI 253) and the fallback is not used (12 November);
+- the BT UART IRQ removes the 1 ms pump, not `BT_EN` or the forced UART clocks; the chip stays powered under
+  `bt=7`, so the low-power/host-wake protocol is the bigger saving;
+- the sensor `HOST_REQ` is level-high: the handler must mask or acknowledge it until the hub is read, or it
+  will fire again immediately.
+
+### First hardware result (12 November)
+
+`wifi_pcie=6 brcmfmac=8 brcmfmac_poll=0` on the S9 attached the line: SPI 253 (INTID 285), level-triggered,
+through the root complex's INTA; `brcmf_pcie_intr` ran when INTx fired, the fallback was never used, and the
+station joined 233 ms after connect (`Work`, 2462 MHz, WPA2/CCMP). 36-channel scans returned 26-28 access
+points in 2.3 s, so commands, events and frames all cross the interrupt path with the 2 ms poller off.
+
+That log is not the screen-off measurement: it was screen-on and charging (`LCD On_Off 1`, `charger=1
+charging=1`) and covers only about 110 s. By 65-75 s the BIG cluster was already at its 650 MHz floor and
+LITTLE at 455 MHz, with `hottest big` 94-95 C, `g3d1` 88 C and the battery at 50 C. A CPU at its floor and
+95 C points at the uncore, ABOX, the GPU domain, the display pipeline or the charger, which is the ranking
+below; it also means the screen-off, unplugged run still has to be made.
+
+ABOX is more than a poller. Step 8 keeps RDMA0, UAIF1, the AUD domain and the Q-channels on; it reads RDMA0's
+status every 2 ms, refills the ring with silence every 10.7 ms, and runs the speaker guard over every period,
+silence included. The amplifiers stop after `QUIET_STOP_US` (3 s), but the pipeline does not. The first fix is
+demand-stop after a silence grace period; the "DMA IRQ" is not a drop-in because the driver comment says no
+interrupt is used and the GIC line is not set up. Demand-stop is the smaller and more valuable change; the IRQ
+can follow if the poll still shows.
+
+The GPU is frequency-DVFS only. `mali_gov=1` switches PLL_G3D between 260/455/572 MHz, but step 2 raises
+BUCK6/vdd_g3d to 950 mV and the G3D domain stays on; in normal operation `g3d_off()` is only the undo path at
+unload. At 260 MHz the rail is still 950 mV. Do not copy S-Boot's 644 mV: the source records
+`DATA_INVALID_FAULT` on the S9+ at that combination. The safe first step is screen-off idle gating: after no
+jobs for a grace period (and only when the display is off), run the existing `g3d_off()` path; power on through
+the existing PMU/BUCK6 sequence at the first job. Voltage-per-OPP from the G3D ASV/fvmap is the second step,
+not a blind write.
+
+Two corrections to the earlier notes:
+
+- the CPU governor's down delay is **200 ms** (5 windows x 40 ms), not 300 ms; the source comment says
+  "about 200 ms". The rest (60% target, touch 1469 MHz, frame 1261 MHz) is correct.
+- `sleep_cores=1` is not "no cluster power-down"; it is an opt-in `processor_exit()`/PSCI `CPU_OFF` for the
+  M3s after 10 s, and `sleep_cores=2` adds the A55s. It is not enabled by default and it is not `CPU_SUSPEND`.
+  The remaining cores still idle in WFI; CPD/SICD and the DECON/DSIM clocks are not done.
+
+Scheduler: XNU has the AMP scheduler (`PSET_AMP_E/P`, `osfmk/kern/sched_amp.c`), but the S9 profile is
+`BCM2837`, and `pexpert/pexpert/arm64/board_config.h` sets `MAX_CPU_CLUSTERS 1` then `#undef __ARM_AMP__`.
+The loader only writes `small-core = 1`; it does not write `cluster-type`. `osfmk/arm64/hakios_ml.h` pairs each
+A55 with an M3 (`processor_set_primary()`, `sched_slow_secondaries`; default `small_cores=2`), so an A55 is a
+slow secondary, not an E-cluster. Native AMP would be a real thermal change for background work, but it is a
+scheduler/topology change after the IRQ and suspend work, not before it.
+
+Thermal pressure is still a mitigation, not a heat source: `userland/src/thermald.c` reads
+`kern.hakios.thermal_running` and `kern.hakios.thermal_pressure`, but the S9 TMU provider publishes only
+`kern.hakios.temp.*` and the `thermal_*` sensor values, so `thermald` exits and iOS stays nominal. This matters
+under load; it does not cool an idle, screen-off phone.
+
+### Two orders, not one
+
+Heat impact for the screen-off, unplugged, centre-hot case is not the same as implementation risk:
+
+| Rank | Heat impact | Why it is here |
+|---|---|---|
+| 1 | No system sleep: no `CPU_SUSPEND`, no cluster power-down (CPD) or SoC idle clock-down (SICD); remaining A55s, uncore, PMIC | The whole SoC stays powered and leaks; `sleep_cores=1` only removes the M3s |
+| 2 | ABOX step 8 | RDMA0/UAIF1/AUD/QCH stay on; 2 ms poll, 10.7 ms guard, silence refill |
+| 3 | DECON/DSIM clocks with the panel asleep | `panel_sleep=1` puts the panel in sleep-in, but the supplies and display clocks stay on |
+| 4 | GPU G3D domain and BUCK6 950 mV | Frequency scales, voltage does not; the domain is left on |
+| 5 | Radios | `bt=7` keeps the chip powered; Wi-Fi is up even when iOS says off; both poll |
+| 6 | Polling aggregate and six sensor streams | About 2,500 wakeups/s plus about 300 sensor frames/s; an idle tax |
+| 7 | A55/background/UFS service | Core 0 runs the loader's UFS service; background work keeps the A55s up |
+| 8 | Camera/ISP | Lazy since 5 November, but a reader still starts it |
+| 9 | Scheduler/M3 | Slow-secondary pairing, not native AMP; a longer-term placement issue |
+| 10 | Thermal pressure | Makes iOS reduce work under load; not an idle heat source |
+
+The low-risk implementation order is different:
+
+1. Wi-Fi INTx: done and validated on the phone (12 November, `brcmfmac=8 brcmfmac_poll=0`); the polling
+   fallback is in the driver.
+2. Touch IRQ: `gpa1-0`, threaded handler, poll fallback; implemented (`s6sy761_irq=1`), not yet run on hardware.
+3. BT UART IRQ: UART RX/SPI 422, `BT_WAKE`/`BT_HOST_WAKE`, poll fallback.
+4. Sensor `HOST_REQ` IRQ: `gpa1-7`, level-high acknowledge, poll fallback.
+5. ABOX demand-stop/AUD gating; the DMA IRQ only after that.
+6. GPU screen-off idle gating; OPP voltage after the ASV/fvmap table.
+7. Radio power-save: Wi-Fi power save, BT low-power; `bt=0 wifi_pcie=0` only as a diagnostic.
+8. A55 floor test: `cpufreq_gov_lit_min=949000`, then `832000`, not 598; watch UFS latency.
+9. `CPU_SUSPEND`/CPD/SICD and DECON/DSIM clock-off: largest structural fix, highest risk.
+10. Native AMP E/P for A55/M3: scheduler/topology change, after suspend.
+11. Thermal pressure bridge: useful under load, can be parallel and low priority.
 
 ## The log that names the source
 
@@ -279,6 +397,14 @@ In order, without a kernel patch:
 6. **Charger:** if the log shows charger heat, use a source that can hold 5 V at the phone's load (a 5 V/2 A
    charger, a short thick cable, a hub whose port is rated for it), and do not charge from the PC while
    measuring. Do not raise `CNFG_09`/`CNFG_02` to make the phone charge faster while it is already hot.
+7. **Wi-Fi poll:** `brcmfmac_poll=0` with `brcmfmac=8`; done on 12 November, the line attached (SPI 253) and
+   the station joined 233 ms after connect. If a future phone cannot attach it, the driver's fallback keeps
+   the 2 ms poller; the INTx path is SPI 253 from `brcmfmac=5`.
+8. **A55 floor:** `cpufreq_gov_lit_min=949000`, then `832000`. Do not start at 598000: core 0 runs the loader's
+   UFS service, and a too-low floor can cost more time (and heat) in UFS waits than it saves.
+9. **ABOX diagnostic:** `abox=0` for one screen-off run (no audio). If the centre cools, the step 8 pipeline
+   is a source; do not keep it off if the phone needs audio. iOS may retry its audio service, so judge the
+   run by the `tmu:` zones, not by the case temperature.
 
 `max77705_wdt=1` is still needed for a charger that stops after five minutes, but it is not a heat fix.
 `max77705_diag=1` and `max77705_fg_s=30` only read the chip.
@@ -293,6 +419,21 @@ changes behaviour on a phone that is already hot.
   1794 MHz (never 2314); start the BIG ceiling at 75 °C instead of 83 °C, with the same 5 °C recovery. It
   would not make the phone fast; it would make the hot state predictable. It needs a log that shows the CPU is
   the main source, and a measurement of the same workload with and without it.
+- **IRQ conversions for the five pollers.** Touch `gpa1-0`, Wi-Fi INTx SPI 253, the BT UART/SPI 422, the sensor
+  `HOST_REQ` gpa1-7 and ABOX's RDMA0. Each needs a threaded handler, a level/edge rule and a fallback to the
+  existing poll. Wi-Fi is done (`brcmfmac_poll=0`, with the poller as its fallback); touch is implemented
+  behind `s6sy761_irq=1`; the other three are still polled.
+- **ABOX demand-stop.** After a silence grace period, stop RDMA0, UAIF1 and the Q-channels and power the AUD
+  domain down; on the first iOS frame, re-prime the ring and start the path again. The amplifiers already stop
+  after 3 s; the pipeline does not. This is the smaller change than a new DMA interrupt, and the audio start
+  latency/click is the thing to measure.
+- **GPU idle gating and G3D OPP.** In normal use the G3D domain and BUCK6 at 950 mV stay on even at 260 MHz.
+  Gate the domain after no jobs for a grace period while the display is off, and power it through the existing
+  PMU/BUCK6 sequence at the first job. Per-OPP voltage needs the G3D ASV/fvmap table; do not copy S-Boot's
+  644 mV, which the source records as a `DATA_INVALID_FAULT` on the S9+.
+- **Native AMP E/P for the A55/M3.** The S9 profile is `BCM2837`, `MAX_CPU_CLUSTERS=1`, `__ARM_AMP__` is
+  undefined and the loader writes only `small-core`; `hakios_ml.h` pairs each A55 with an M3 as a slow
+  secondary. A real E/P split is a scheduler/topology change, not a boot-arg test.
 - **Thermal pressure for iOS.** Define `kern.hakios.thermal_running` and `kern.hakios.thermal_pressure` in the
   S9's TMU provider (0 nominal, 1 moderate, 2 heavy, 3 trapping, 4 sleeping), update the level from the BIG/G3D
   zones with hysteresis, and let `thermald` post it. Then `ProcessInfo.thermalState` and apps that honour it
@@ -320,11 +461,16 @@ changes behaviour on a phone that is already hot.
 | Scion floors | big 650000, touch 1469000, frame 1261000; lit 1053000, touch 1248000 | `EXYNOS_SCION_GOV` |
 | Parking thresholds | park under 70 °C, unpark at 78 °C | `park_under_mc`, `unpark_at_mc` |
 | GPU rates / target | 260, 455, 572 MHz; 50% busy | `g3d_rates`, `GOV_TARGET` |
+| GPU rail / domain | BUCK6 950 mV fixed; G3D domain on; no per-OPP voltage | `hakios.mali.c` |
+| Pollers | touch 4 ms, Wi-Fi 2 ms, BT 1 ms, sensor 4 ms, ABOX 2 ms; about 2,500/s | driver constants above |
+| ABOX step 8 | RDMA0/UAIF1/AUD/QCH on; 2 ms status poll; 10.7 ms guard; amps stop after 3 s | `hakios.exynos_abox.c` |
+| CPU down delay | 5 x 40 ms = 200 ms | `DOWN_WINDOWS`, `window_ms` |
+| Scheduler | A55 paired to M3; `small_cores=2`; `MAX_CPU_CLUSTERS=1`, no `__ARM_AMP__` | `hakios_ml.h`, `board_config.h` |
 | GPU frame floor | 572 MHz while a frame arrived within 100 ms | `mali_gov_frame`, `GOV_FRAME_MS` |
 | GPU caps | 455 MHz from 85 °C, 260 MHz from 95 °C, 5 °C hysteresis | `GOV_CAP1_MC`, `GOV_CAP2_MC`, `GOV_HYST_MC` |
 | TMU stop | 110 °C SoC, 60 °C battery, three readings | `tmu_stop`, `tmu_batt_stop` |
 | Battery events | 46 °C charger high, 50 °C high event, 60 °C stop | `battery_data_starlte_common.dtsi`, `tmu_batt_stop` |
-| Panel / sleep | no system sleep; WFI; panel sleeps only with `panel_sleep=1`; `sleep_cores=1` after 10 s | kernel `docs_screen-off-power.md` |
+| Panel / sleep | no system sleep; WFI; panel sleeps only with `panel_sleep=1`; `sleep_cores=1` (M3) / `2` (M3+A55) are opt-in PSCI `CPU_OFF` after 10 s, not `CPU_SUSPEND` | kernel `docs_screen-off-power.md` |
 
 ## Open questions for the phone's owner
 
