@@ -42,8 +42,8 @@ on:
         type: boolean
         default: true
       userdata_blocks:
-        description: "USERDATA size in 4096-byte blocks, as DEVICE=BLOCKS (S9 64 GB: starlte=13615227); this FORMATS USERDATA and erases Android's data"
-        default: "starlte=13615227"
+        description: "USERDATA size in 4096-byte blocks, as DEVICE=BLOCKS (S9 64 GB: starlte=13917184); this FORMATS USERDATA and erases Android's data"
+        default: "starlte=13917184"
 
 concurrency:
   group: s9-installer

@@ -437,15 +437,15 @@ To use it:
    [docs/IPA.md](docs/IPA.md) for `ipainstaller`.
 
 The run's inputs: the kernel and packaging refs, the partition, extra boot-arguments, the time limit, `tweaks`
-(default `true`, ElleKit and PreferenceLoader), and `userdata_blocks` (default `starlte=13615227`, in 4096-byte
+(default `true`, ElleKit and PreferenceLoader), and `userdata_blocks` (default `starlte=13917184`, in 4096-byte
 blocks; **it formats USERDATA**, so the size must match the phone). For the heat, drain and charging test, put
 `max77705_wdt=1 max77705_diag=1 max77705_fg_s=30 tmu=3 fps_log=1` in the boot-arguments input; for screen-on
 heat add `gov_policy=2 cpufreq_gov_big_max=1469000 mali_gov_frame=455` (the defaults are four M3s to 1794 MHz
 and a 572 MHz GPU floor while frames come). `panel_sleep=1` and `sleep_cores=1` only act after the screen is off,
 `gov_policy=3` can be hotter, and a charging log must not be captured over the PC USB cable.
 [docs/heat.md](docs/heat.md) has the heat analysis and test order; [docs/power-charging.md](docs/power-charging.md)
-says what each charger switch does, and `tools/analyze-max77705-log.mjs` reads the log. 13615227 blocks is the S9 64 GB's
-55,767,969,792-byte USERDATA; for the S9+ or Note9 add their sizes (`star2lte=... crownlte=...`), or the installer
+says what each charger switch does, and `tools/analyze-max77705-log.mjs` reads the log. 13917184 blocks is the S9 64 GB's
+57,004,785,664-byte USERDATA; for the S9+ or Note9 add their sizes (`star2lte=... crownlte=...`), or the installer
 refuses `-U` on those phones.
 
 ## Storage: iOS from the phone's flash
