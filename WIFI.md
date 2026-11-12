@@ -47,7 +47,7 @@ shows only `lx_prepare()`, `lx_start()`, `lx_stop()` and `lx_transmit()`. What i
 |---|---|
 | `tools/mk-brcmfmac.sh` | the twin of `mk-ath11k.sh`: brcmfmac, brcmutil and their headers from the same pinned Linux (7.0.14), every file's ISC licence checked, `wifi/lx/brcmfmac/patches/bcm4361.patch` applied; 24 of brcmfmac's files built (`pcie.c`, `chip.c`, `firmware.c`, `core.c`, `msgbuf.c`, `commonring.c`, `flowring.c`, `fwil.c`, `fweh.c`, `feature.c`, `cfg80211.c`, `p2p.c` and the rest; no SDIO, USB or BCDC); `out/brcmfmac.o`. Only `debug.c`'s three debugfs functions are stubs |
 | `wifi/lx/brcmfmac/patches/bcm4361.patch` | the BCM4361 in brcmfmac: PCI device 0x441f in its table; chip IDs 0x4361 and 0x4347 (the chip says one or the other: bcmdhd's `dhd_validate_chipid()`); RAM base 0x170000 for both (`CR4_4347_RAM_BASE`); firmware `brcmfmac4361b0-pcie` for revisions 3 and 4 (B0, B1), `brcmfmac4361b2-pcie` from 5 (B2); and the two lines where `brcmfmac=N` stops it (by returning, leaving things as they are: brcmfmac's way of failing would reset the chip) |
-| `wifi/lx/brcmfmac/lx_pci.c` | the `struct pci_dev`: configuration space a word at a time through the kernel, the BARs where stage 1 put them, the PCI driver registered and the device probed as Linux's PCI core would, and the interrupt: INTx from `brcmfmac=5` (below), before that (or with `brcmfmac_poll=1`) brcmfmac's handler called by a thread every `brcmfmac_poll_ms` (2) ms; MSI is off on this root complex |
+| `wifi/lx/brcmfmac/lx_pci.c` | the `struct pci_dev`: configuration space a word at a time through the kernel, the BARs where stage 1 put them, the PCI driver registered and the device probed as Linux's PCI core would, and the interrupt: INTx from `brcmfmac=5` (below), before that (or with `brcmfmac_poll=1`) brcmfmac's handler called by a thread every `brcmfmac_poll_ms` (2) ms; if INTx cannot be attached, it logs `INTx cannot be attached` and uses the same thread instead of failing the probe; MSI is off on this root complex |
 | `wifi/lx/brcmfmac/lx_cfg.c` | cfg80211 for a FullMAC driver: the wiphy, the network device's registration, the callbacks (`cfg80211_scan_done`, `inform_bss_data`, `connect_done`, `disconnected`), which LinuxKPI leaves empty and `lx_prelude.h` sends here; above them the kernel's station boundary (`sys/hakios.sta.h`, what iOS's Wi-Fi settings ask through `WIFI_STA`), on brcmfmac's `cfg80211_ops` (scan, connect, disconnect, add_key); the four-way handshake by `wifi/lx/src/lx_wpa.c`; frames through the network device's `ndo_start_xmit` and `netif_rx`; and `brcmf_dmi_probe()`, brcmfmac's hook for a board's settings: the phone's address, roaming off |
 | `wifi/lx/brcmfmac/lx_rsn.h` | an access point's RSN element read, and ours for the association request (host-tested) |
 | `wifi/lx/brcmfmac/lx_kpi.c`, `lx_brcmf.c` | what else brcmfmac asks of LinuxKPI (firmware in the background, a net_device as memory, cfg80211's channel arithmetic), and the steps |
@@ -113,8 +113,9 @@ devices/starlte/mkimage.sh -s 120 cpus=2 bootcpu=2 wifi_pcie=6 brcmfmac=7     # 
 devices/starlte/mkimage.sh -s 120 cpus=2 bootcpu=2 wifi_pcie=6 brcmfmac=8     # joining (fw-wifi/network, or from Settings)
 ```
 
-If 5 fails (`Timeout on response` where 4 had none, or no interrupt counted when the driver lets INTx go), add
-`brcmfmac_poll=1` to 6 to 8 and go on: the rest does not depend on it.
+If 5 fails (`Timeout on response` where 4 had none, or no interrupt counted when the driver lets INTx go), the
+driver now says `INTx cannot be attached ...` and uses the thread by itself, so 6 to 8 still work; `brcmfmac_poll=1`
+forces the thread from the start. The rest does not depend on it.
 
 The kernel has the driver only if `tools/mk-brcmfmac.sh` ran before it was built; one built without says
 `THE DRIVER IS NOT BUILT IN`. What to look at when a step fails:
