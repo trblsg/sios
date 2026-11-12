@@ -6,7 +6,10 @@ report. The first log (12 November) was screen-on and charging and covers two mi
 after the wake, and a hard reset at 101-102 °C — but it was charging through the PC's 500 mA port with the console
 attached, so it is **not** the unplugged baseline. The third one ("Third hardware result") repeats the same shape
 with hardware video decode working: 900 s, peak 96.0 °C, and a return to the loader at 916 s. Its last lines are a
-panic in the console policy on the way out, not a thermal reset; the driver fix is described there. The measurements
+panic in the console policy on the way out, not a thermal reset; the driver fix is described there. The fourth
+("Fourth hardware result") is the console fix with `abox=0`: 601 s of log, 88 °C in the video band, within 1-2 °C of
+the third run, so `abox=0` changed nothing measurable, and the log ends before the 900 s return with no explanation
+yet. The measurements
 before these were made on the development phone ("phone 2") on 5 November, and the constants are from the kernel
 tree as it is on 12 November. The charging side — `CNFG_09`, AICL, the CV taper and the four cases — is in
 [power-charging.md](power-charging.md).
@@ -447,17 +450,52 @@ The panic frames cannot be named from the checked-in `prebuilt/hakios-kernel`: t
 (`Thu Nov 12 15:47:18 UTC 2026`), so its layout does not match. Keep the unstripped kernel of the next build with the
 log.
 
+### Fourth hardware result (12 November): `abox=0`, still 88 °C
+
+Kernel `geaf877f3` (the console guard), built `Thu Nov 12 18:14:48 UTC 2026`; boot args `... mfc=5 ...
+s6sy761_irq=1 brcmfmac_poll=0 abox=0`, `loader_return_after=900`. There is no `abox:` line at init or at the end: the
+driver never came up, which is what `abox=0` asks. The MFC is unaffected: `mfc_fw.bin, 682192 bytes, from fw/ of the
+small image`, firmware `21-01-12`, block `0x1200`, `6 frames shown, 6 with the right CRC, of 6, in 10992 us (error 0)`,
+`the interrupt, 388: attached (0)`, `/dev/hakios-mfc`, `'avc1'` and `'hvc1'` registered. No panic in the 601 s the log
+covers.
+
+| Uptime | What happened | BIG / LITTLE | Notes |
+|---|---|---|---|
+| 116 s | first app, the peak | 91.1 / 86.0 °C | M3 1261 MHz, 100% asked; no video yet |
+| 162 s | lock (`Set Blanked: YES`) | 72.0 / 70.7 °C | |
+| 162-393 s | screen off | 72-65 / 70.7-64.6 °C | M3 650 MHz, 7-9% asked; the last 90 s at 65-66 / 64.6; battery 40.5 °C at 299 s, 99.74%, "on a charger, not charging" |
+| 393-401 s | wake | 89.0 / 81.9 °C at 401 s | M3 1261 MHz, 98% asked; the launch spike |
+| 420-601 s | YouTube | 88.0 / 86.0 °C at 601 s | M3 650 MHz, 88-100% asked, `sum big` 212-354%; A55 455 MHz; H.264 640x360 sessions at 455 and 464 s; battery 44.4 °C at 600 s, 99.44%, -21 mA, "on a charger, not charging" |
+| 601 s | the log ends | 88.0 / 86.0 °C | the last line is a complete `cpufreq_gov` line; no `--- loader_return`, no panic, no new boot banner |
+
+**`abox=0` changed nothing measurable.** At the same uptime the new run is +1.0/+1.1 °C at 570 s and +1.0/+2.1 °C at
+600 s; at the same time since the video started it is within 1 °C (88/85-86 against 88/85-86). The screen-off floor is
++1 °C (65/64.6 against 64/63.6). The 91.1 °C peak is the first app at 116 s, not the video. The video band was still
+rising when the log stopped (84 at 420 s, 87 at 510 s, 88 at 570-601 s), and the third run needed another 240 s of video
+to reach 95-96 °C, so this log cannot say the new run would have stayed at 88 °C. What it does say is that the ABOX is
+not the term to chase: with it off, the four M3s still sit at 650 MHz at 2.1-3.5 cores' worth of asked load (`sum big`
+212-354%) and the A55s at 455 MHz. The heat is the video pipeline on the CPU, the MFC frame hand-off and the uncore,
+not the audio DSP.
+
+**The end at 601 s is unexplained.** The last line is complete, the sensors are still ticking at 601 s, and there is no
+`--- loader_return_after expired ---` (900 s had not arrived), no panic and no new loader banner. That is either the
+capture being stopped or the console dropping; a hard reset re-enumerates the USB port and PuTTY stops logging the same
+way. Only the owner can say which. The old capture ended mid-line at 849 s, which is what a stopped or dropped capture
+looks like; this one ends on a line boundary, which fits a USB drop or a reset.
+
 What to run next, one variable at a time:
 
-1. **Rebuild with `console-irq-guard` and `abox=0`, same `time_limit=900`.** Boot args:
-   `s6sy761_irq=1 brcmfmac_poll=0 abox=0` (the build keeps `mfc=5` and `loader_return_after=900`). Confirm the return
-   is clean: the `--- loader_return()` banner with no panic before it.
-2. Compare the 208-444 s screen-off band and the 491-890 s YouTube band with this run. If `abox=0` removes the centre
-   heat, implement ABOX demand-stop; if it does not, the remaining terms are the CPU copy path and the uncore.
-3. After that, the screen-off test: `panel_sleep=1` first, `sleep_cores=1` in a later run, after 10-15 minutes of
-   settling, unplugged or on a 5 V/2 A source.
-4. If the remaining CPU load tracks MFC frame copying, test `mfc_zc=1` in a run of its own; do not combine it with
-   `abox=0`.
+1. **Answer the 601 s question first.** If the phone reset, keep this log: it is a new symptom, not the heat, and the
+   next boot's loader log is the evidence. If the capture was stopped, rerun the same build and arguments for the full
+   900 s and confirm the clean `--- loader_return()` banner with no panic.
+2. **`mfc_zc=1` on the `abox=0` baseline**, in a run of its own: `abox=0 mfc_zc=1`, same `time_limit=900`. The one
+   earlier zero-copy run had wrong frames, so check the picture before trusting the temperature: `mfc_vt` at full speed
+   and the test page's frame count first. The target is the 250 IOSurfaces/133 MB and 314 refills a second (about
+   80 MB/s) the GL layer reports and the 171 GL calls/24 draws at 30 ms; the kernel's own `frame_out` copyout is only
+   about 10 MB/s, so the GL layer's refills are the bigger number to watch.
+3. **The screen-off test** stays next for the unplugged case: `panel_sleep=1` first, `sleep_cores=1` in a later run,
+   after 10-15 minutes of settling, unplugged or on a 5 V/2 A source.
+4. **Do not combine** `mfc_zc` with `panel_sleep`/`sleep_cores`; one variable per run.
 
 ### Two orders, not one
 
