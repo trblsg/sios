@@ -1003,6 +1003,26 @@ PowerShell console lists it if PuTTY is not installed). The log streams as soon 
 it from its first line, and `help` lists the console's commands. The cable also charges the phone from the PC, so
 for an unplugged run: let it run first, then plug in and send `log`.
 
+There is no prompt and the phone says nothing until Enter: a PuTTY window that only streams the log shows no echo
+while you type, and `help` + Enter is answered with `usb> help`. Keep PuTTY's session log on and search it for
+`usb>`: the log is busy and the answer scrolls away. `Connection → Serial → Flow control` must be **None**;
+`Terminal → Local line editing: Force off` sends each key at once, and `Local echo: Force on` makes the typing
+visible (the phone then echoes the line again on Enter). Only one program may hold the port. If nothing is
+answered, the kernel at `8901f8c3` or later logs the host's first bytes once, in hex:
+
+```
+usb: the host's first 5 bytes (of 5): 68 65 6c 70 0d
+```
+
+No such line means the host never wrote (wrong COM port, flow control, or another handle); the line without
+`usb> help` means the bytes arrived but did not end a line. PowerShell can send one command without PuTTY:
+
+```
+$p = [IO.Ports.SerialPort]::new('COM5', 115200, 'None', 8, 'One')
+$p.DtrEnable = $true; $p.Open(); $p.WriteLine('help')
+Start-Sleep -Milliseconds 500; $p.ReadExisting(); $p.Close()
+```
+
 The console's commands: `help`, `stat` (the link's counters), `uptime`, `sysctl NAME`, `log` (the kernel's log again from
 its start), `shot [N]` (the panel's picture, every Nth pixel, as a framed binary blob; the log is held back while it goes
 out), `return` (end the run: the loader restarts the phone into TWRP). It is the kernel's, not a shell.
