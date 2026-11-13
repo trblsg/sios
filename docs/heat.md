@@ -13,7 +13,8 @@ still unchecked. The fifth ("Fifth hardware result") adds `mfc_zc=1`: the consol
 copy engaged, and the video band was 6-9 °C cooler (81/78.8 °C at 600 s, 85/81.9 °C at 870 s). But the picture stood
 still: the block's DMA never raised the IOSurface seed, so the compositor kept showing a cached frame. Its 85 °C is
 **not** a valid heat result. The seed is raised in `4fe0b7cd`; the next run checks the picture before the temperature.
-The measurements
+The idle ranking below is now ordered around the power domains and a real suspend: ABOX and polling are measured
+negatives, not the next fixes. The measurements
 before these were made on the development phone ("phone 2") on 5 November, and the constants are from the kernel
 tree as it is on 12 November. The charging side — `CNFG_09`, AICL, the CV taper and the four cases — is in
 [power-charging.md](power-charging.md).
@@ -43,7 +44,9 @@ The three facts that decide a heat test:
    after the sensor reaches 85 °C, and the cap is applied after the floor.
 3. **With the screen off the phone is not asleep.** There is no system sleep and no `CPU_SUSPEND`; the cores idle
    in WFI, the panel may still scan, and the A55s plus Wi-Fi/BT/sensor hub keep running. `panel_sleep=1` and
-   `sleep_cores=1` remove two of those, not all of them.
+   `sleep_cores=1` remove two of those, not all of them: tried together on battery on 10 November, the board
+   centre stayed hot. The next candidates are the G3D/display domains and the A55/uncore/memory interconnect,
+   not the panel scan or the four M3s alone.
 
 And one negative result: **`gov_policy=3` is not the heat switch.** It can be hotter. The next sections say
 why, then how to find the actual source with a log that needs no kernel rebuild.
@@ -225,14 +228,15 @@ sum is an idle tax, not proof by itself that the centre of the board is hot:
 | Touch S6SY761 | `drivers/input/touch/hakios.s6sy761.c` | `POLL_MS 4` | 250/s | after step 6; thread priority 92; `gpa1-0` is an active-low IRQ pin, not used |
 | Wi-Fi | `wifi/lx/brcmfmac/lx_pci.c` | `brcmfmac_poll_ms` 2 | 500/s | only with `brcmfmac_poll=1`; the INTx path is SPI 253 from `brcmfmac=5` |
 | Bluetooth | `drivers/bluetooth/bcm4361/hakios.bcm4361_bt.c` | 1 ms idle | 1,000/s | `bt=7` publishes the tty; `bt_tty_pump` wakes even when no byte moves |
-| Sensor hub | `drivers/input/ssp/hakios.ssp.c` | `idle_us=4000` | 250/s | `shub=6`; `HOST_REQ` gpa1-7 is a level-high IRQ, polled; six sensors at 20 ms, slow ones at 200 ms |
+| Sensor hub | `drivers/input/ssp/hakios.ssp.c` | `idle_us=4000` | 250/s | `shub=6`; `HOST_REQ` gpa1-7 is a level-high IRQ, polled; six sensors: three at 20 ms and three at 200 ms, about 165 requested samples/s |
 | ABOX | `drivers/audio/abox/hakios.exynos_abox.c` | `POLL_MS 2` | 500/s | `abox=8`; step 8 `stream_run()` never returns |
 
 The aggregate is about 2,500 checks/s, before the 40 ms CPU governor, the 1 s TMU, the 30 s gauge, user-space
 timers and the display's frame thread. At roughly 10-20 us a wake, that is about 2.5-5% of one core,
 plus cache/uncore effects. It is not enough, by itself, to explain a hot mainboard centre; if `lit` and `big`
-are near idle in the log and the centre is still hot, the candidates are ABOX, DECON/DSIM, the GPU domain/BUCK6
-and the SoC uncore/PMIC, not the pollers alone.
+are near idle in the log and the centre is still hot, the candidates are the GPU domain/BUCK6, DECON/DSIM, the
+A55/SoC uncore and memory interconnect, and the PMIC, not ABOX or the pollers alone (ABOX was measured later and
+is negative).
 
 What the pollers do mean:
 
@@ -257,15 +261,17 @@ points in 2.3 s, so commands, events and frames all cross the interrupt path wit
 That log is not the screen-off measurement: it was screen-on and charging (`LCD On_Off 1`, `charger=1
 charging=1`) and covers only about 110 s. By 65-75 s the BIG cluster was already at its 650 MHz floor and
 LITTLE at 455 MHz, with `hottest big` 94-95 C, `g3d1` 88 C and the battery at 50 C. A CPU at its floor and
-95 C points at the uncore, ABOX, the GPU domain, the display pipeline or the charger, which is the ranking
-below; it also means the screen-off, unplugged run still has to be made.
+95 C points at the uncore, the GPU domain, the display pipeline or the charger; ABOX was measured on 12 November
+and is not the term. The screen-off, unplugged case was already captured on 10 November (above), and it is the
+case this ranking is about.
 
 ABOX is more than a poller. Step 8 keeps RDMA0, UAIF1, the AUD domain and the Q-channels on; it reads RDMA0's
 status every 2 ms, refills the ring with silence every 10.7 ms, and runs the speaker guard over every period,
-silence included. The amplifiers stop after `QUIET_STOP_US` (3 s), but the pipeline does not. The first fix is
-demand-stop after a silence grace period; the "DMA IRQ" is not a drop-in because the driver comment says no
-interrupt is used and the GIC line is not set up. Demand-stop is the smaller and more valuable change; the IRQ
-can follow if the poll still shows.
+silence included. The amplifiers stop after `QUIET_STOP_US` (3 s), but the pipeline does not. Demand-stop after a
+silence grace period is still the right architectural change; the "DMA IRQ" is not a drop-in because the driver
+comment says no interrupt is used and the GIC line is not set up. But the 12 November A/B (`abox=0`: 65/64.6 °C
+screen-off against 64/63.6 °C with ABOX normal, video within 1 °C) says it will not move the idle floor; it is
+power/architecture work now, not the first thermal fix.
 
 The GPU is frequency-DVFS only. `mali_gov=1` switches PLL_G3D between 260/455/572 MHz, but step 2 raises
 BUCK6/vdd_g3d to 950 mV and the G3D domain stays on; in normal operation `g3d_off()` is only the undo path at
@@ -371,14 +377,16 @@ What was done next, one variable at a time (the third result below is step 1; st
 1. **MFC first.** Build with this tree's `firmware/mfc/mfc_fw.bin` in `fw/`, boot args unchanged (`mfc=5` is already
    there), and repeat the same YouTube run. If the two `exynos_mfc: 3` lines appear, the CPU/GPU load and the
    temperature after 5-6 minutes are the measurement. Do not add `mfc_irq=1` in the same run; test it after MFC works.
-   **Done:** both lines appeared, VideoToolbox used the MFC, and the peak was still 96.0 °C; the further run is `abox=0`.
+   **Done:** both lines appeared, VideoToolbox used the MFC, and the peak was still 96.0 °C; the `abox=0` run was
+   done next and was negative (fourth result).
 2. **Do not use the PC port as the charger for the heat run.** Run unplugged from a cool start, or on a 5 V/2 A source.
    If the console must stay attached, say so in the result; the 500 mA port changes the battery term.
-3. **Screen-off baseline after settling.** Wait 10-15 minutes after boot, then lock. Add `panel_sleep=1` first, then
-   `sleep_cores=1` in a later run; do not change both with MFC.
-4. **If MFC works but the phone still reaches ~95 C,** the next diagnostic is `abox=0` for one run (no audio) to size
-   the ABOX/amplifier term, then ABOX demand-stop. The GPU/display gating is after that. **This is the run after the
-   third result below.**
+3. **Screen-off baseline after settling.** Wait 10-15 minutes after boot, then lock. `panel_sleep=1` was added
+   first and `sleep_cores=1` in a later run; both together on battery still left the board centre hot (10 November),
+   so neither the panel scan nor the four M3s is the whole cause. Do not change both with MFC.
+4. **The `abox=0` diagnostic was run (fourth result) and was negative:** 65/64.6 °C screen-off against 64/63.6 °C
+   with ABOX normal, and the video band within 1 °C. ABOX demand-stop stays architecture/power work; the GPU and
+   display domain gating come first. **This is the run after the third result below.**
 
 ### Third hardware result (12 November): MFC decodes, 96 °C, the return's last line
 
@@ -500,8 +508,10 @@ What to run next, one variable at a time:
    refills a second (about 80 MB/s) and its 171 GL calls/24 draws at 30 ms, the MFC frame hand-off and the uncore. The
    cputop line says which process owns the cores; use it before another driver change. The kernel's own `frame_out`
    copyout is only about 10 MB/s, so it is not the big term by itself.
-3. **The screen-off test** stays next for the unplugged case: `panel_sleep=1` first, `sleep_cores=1` in a later run,
-   after 10-15 minutes of settling, unplugged or on a 5 V/2 A source.
+3. **The screen-off test is not a new measurement:** `panel_sleep=1` and `sleep_cores=1` were already tried together
+   on battery and the board centre stayed hot. What is left for the unplugged case is the one-peripheral A/B series
+   (`bt=0`, `shub=0`, `mfc=0`, `wifi_pcie=0`) in "The idle floor" below, after 10-15 minutes of settling, unplugged
+   or on a 5 V/2 A source.
 4. **Do not combine** `mfc_zc` with `panel_sleep`/`sleep_cores`; one variable per run.
 
 ### Fifth hardware result (12 November): zero copy engaged, the picture stood still
@@ -542,46 +552,84 @@ What to run next, one variable at a time:
    refills during the video (the seed now changes). The kernel copyout is still gone; the compositor's refill is not, so
    expect a temperature **above** the invalid 85 °C, and compare it with the fourth run's 88/86 °C at 600 s and 94/91 °C
    at 870 s.
-2. **If the picture moves and the temperature is still below the copy path's**, zero copy stays; the next variable is
-   `panel_sleep=1` for the screen-off case, then `sleep_cores=1` in a later run.
+2. **If the picture moves and the temperature is still below the copy path's**, zero copy stays; the next screen-off
+   variable is the one-peripheral A/B series below, not `panel_sleep`/`sleep_cores` (both already tried).
 3. **If the picture moves and the temperature returns to 88+ °C**, the remaining term is the compositor's refill of the
    video surface (the same copy the copy path paid); the next change would be to let the GL layer sample the NV12
    surface directly instead of refreshing a BGRA texture, not another MFC change.
 4. **Do not combine** `mfc_zc` with `panel_sleep`/`sleep_cores`; one variable per run.
 
+### The idle floor: what the A/B runs have ruled out (12 November)
+
+The 10 November case is still the one to solve: screen off, unplugged, every app closed, brightness at its
+minimum, the mainboard hot in the centre. These results narrow it:
+
+| Test | Result | What it rules out |
+|---|---|---|
+| ABOX normal vs `abox=0`, same workload | screen-off 64/63.6 °C vs 65/64.6 °C; video within 1 °C at the same elapsed time | ABOX as the main idle source; demand-stop is architecture/power work, not the thermal fix |
+| `panel_sleep=1 sleep_cores=1`, unplugged | the board centre stayed hot | the panel scan and the four M3s as the sole cause |
+| touch SPI 44/INTID 76; Wi-Fi INTx SPI 253/INTID 285 | up to 806 touch IRQs a minute; 74,874 Wi-Fi INTx; no poller fallback; floor unchanged | polling as the 65 °C source (it is still an idle tax, and `s6sy761_irq=1`/`brcmfmac_poll=0` stay) |
+| software decode vs MFC | 101-102 °C and a hard reset vs 96 °C peak | MFC as an idle fix; it is a video-load fix |
+| screen off, M3 6-15% busiest, A55 1053 MHz at near-zero load | 64-67 °C | load and governor as the idle source; the remaining power is in domains, uncore and memory |
+
+The fifth run does not change this table: its video was frozen, so its 6-9 °C is not a heat result. Wait for
+`4fe0b7cd` to show moving video before using its temperature.
+
+No single peripheral has been removed yet, so the next step is diagnostic, not a patch. Run each of these
+unplugged from a cool start, lock after 10-15 minutes of settling, one per run, and compare the `tmu:` zones at
+the same uptime (the case temperature is not the measurement):
+
+```
+bt=0
+shub=0
+mfc=0
+wifi_pcie=0
+```
+
+`bt=0` overrides the installer's `bt=7`; `shub=0` may make iOS retry its sensor services, so judge it by the
+`tmu:` lines, not by a warmer case. If each run is 0-2 °C from the baseline, no single peripheral causes the
+floor, and the rest is the A55/uncore/memory interconnect plus the G3D/display domains. The A55 floor A/B
+(`cpufreq_gov_lit_min=949000`, then `832000`) is a useful cross-check: a 1-2 °C change confirms that clock rate
+is not the lever and that deep idle is the missing piece.
+
 ### Two orders, not one
 
-Heat impact for the screen-off, unplugged, centre-hot case is not the same as implementation risk:
+Heat impact for the screen-off, unplugged, centre-hot case is not the same as implementation risk. This ranking
+replaces the earlier one: ABOX and polling are no longer near the top, because the A/B runs above measured them.
 
 | Rank | Heat impact | Why it is here |
 |---|---|---|
 | 1 | No system sleep: no `CPU_SUSPEND`, no cluster power-down (CPD) or SoC idle clock-down (SICD); remaining A55s, uncore, PMIC | The whole SoC stays powered and leaks; `sleep_cores=1` only removes the M3s |
-| 2 | ABOX step 8 | RDMA0/UAIF1/AUD/QCH stay on; 2 ms poll, 10.7 ms guard, silence refill |
-| 3 | DECON/DSIM clocks with the panel asleep | `panel_sleep=1` puts the panel in sleep-in, but the supplies and display clocks stay on |
-| 4 | GPU G3D domain and BUCK6 950 mV | Frequency scales, voltage does not; the domain is left on |
-| 5 | Radios | `bt=7` keeps the chip powered; Wi-Fi is up even when iOS says off; both poll |
-| 6 | Polling aggregate and six sensor streams | About 2,500 wakeups/s plus about 300 sensor frames/s; an idle tax |
-| 7 | A55/background/UFS service | Core 0 runs the loader's UFS service; background work keeps the A55s up |
-| 8 | Camera/ISP | Lazy since 5 November, but a reader still starts it |
-| 9 | Scheduler/M3 | Slow-secondary pairing, not native AMP; a longer-term placement issue |
-| 10 | Thermal pressure | Makes iOS reduce work under load; not an idle heat source |
+| 2 | GPU G3D domain and BUCK6 950 mV | Frequency falls to 260 MHz, but the domain stays on and the rail stays at 950 mV; leakage does not follow frequency |
+| 3 | DECON/DSIM and the display domain | `panel_sleep=1` puts the panel in sleep-in, but the supplies, Q-channel and display clocks are not proven off |
+| 4 | A55 cluster, SoC uncore, memory interconnect | The M3s have been `CPU_OFF` and the board centre stayed hot; A55 sits at 1053 MHz with near-zero load screen-off |
+| 5 | Radios: BT + Wi-Fi/PCIe + sensor hub | `bt=7` keeps the chip powered; Wi-Fi/PCIe is up; `shub=6` keeps the hub MCU and six streams; the one-peripheral A/B is pending |
+| 6 | MFC domain idle | `mfc=5` from boot and no runtime `pd-mfc` off; the `mfc=0` A/B is pending; MFC is proven only as a video-load fix |
+| 7 | ABOX step 8 | A/B is negative (65/64.6 °C vs 64/63.6 °C screen-off; video within 1 °C); demand-stop is still worth doing for architecture/power |
+| 8 | Touch/Wi-Fi polling | Both IRQ paths are validated and the floor did not move; an idle tax, not the 65 °C source |
+| 9 | Camera/ISP | Lazy since 5 November, but a reader still starts it |
+| 10 | Scheduler/M3 | Slow-secondary pairing, not native AMP; a longer-term placement issue |
+| 11 | Thermal pressure | Makes iOS reduce work under load; not an idle heat source |
 
 The low-risk implementation order is different:
 
-1. Wi-Fi INTx: done and validated on the phone (12 November, `brcmfmac=8 brcmfmac_poll=0`); the polling
-   fallback is in the driver.
-2. Touch IRQ: `gpa1-0`, threaded handler, poll fallback; implemented and validated on the phone (12 November,
-   `s6sy761_irq=1`: SPI 44/INTID 76, 197-806 IRQs a minute under use, no poller fallback).
-3. BT UART IRQ: UART RX/SPI 422, `BT_WAKE`/`BT_HOST_WAKE`, poll fallback.
-4. Sensor `HOST_REQ` IRQ: `gpa1-7`, level-high acknowledge, poll fallback.
-5. ABOX demand-stop/AUD gating; the DMA IRQ only after that. This is the next measurement (`abox=0`), and the fix
-   after it if the centre cools.
-6. GPU screen-off idle gating; OPP voltage after the ASV/fvmap table.
-7. Radio power-save: Wi-Fi power save, BT low-power; `bt=0 wifi_pcie=0` only as a diagnostic.
-8. A55 floor test: `cpufreq_gov_lit_min=949000`, then `832000`, not 598; watch UFS latency.
-9. `CPU_SUSPEND`/CPD/SICD and DECON/DSIM clock-off: largest structural fix, highest risk.
-10. Native AMP E/P for A55/M3: scheduler/topology change, after suspend.
-11. Thermal pressure bridge: useful under load, can be parallel and low priority.
+1. **Unplugged A/B series, no patch:** `bt=0`, `shub=0`, `mfc=0`, `wifi_pcie=0`, one per run. If each is 0-2 °C,
+   no single peripheral causes the floor.
+2. **G3D screen-off power gating (first patch):** after display off and no GPU job for a grace period, run the
+   existing `g3d_off()` path and return BUCK6 from 950 mV; restore through `step_power()`/`step_dtzpc()` at the first
+   job. It must be re-entrant, read the display-off state, and drain the job queue before power-off.
+3. **MFC runtime power gating (conditional):** `pd-mfc` off when there is no decode session; power-on/re-init at the
+   first decode. Do it only if `mfc=0` shows a term.
+4. **A55 floor A/B:** `cpufreq_gov_lit_min=949000`, then `832000`; expect 1-2 °C and watch UFS latency. A small
+   change confirms that deep idle, not the governor, is the missing piece.
+5. **`CPU_SUSPEND`/CPD/SICD + DECON/DSIM clock-off:** the structural fix, and the one that turns screen off into
+   standby. Highest risk; do it after the two domains have been measured.
+6. **ABOX demand-stop/AUD gating:** still the right architectural change; do it for power and audio-path hygiene,
+   not as the idle thermal fix. The DMA IRQ only after that.
+7. **Radio power-save:** Wi-Fi power save, BT low-power/host-wake; `bt=0 wifi_pcie=0` only as a diagnostic.
+8. **Remaining IRQ conversions:** BT UART and sensor `HOST_REQ`; touch and Wi-Fi are done and validated.
+9. **Native AMP E/P for A55/M3:** scheduler/topology change, after suspend.
+10. **Thermal pressure bridge:** useful under load, can be parallel and low priority.
 
 ## The log that names the source
 
@@ -601,11 +649,15 @@ tmu=3 fps_log=1 gov_policy=2 cpufreq_gov_big_max=1469000 mali_gov_frame=455
 tmu=3 fps_log=1 gov_policy=2 cpufreq_gov_big_max=1261000 mali_gov_frame=0
 ```
 
-For screen-off, add `panel_sleep=1` first; add `sleep_cores=1` only after the picture comes back:
+For screen-off, keep `panel_sleep=1 sleep_cores=1` as the baseline (both were already tried; the floor remained)
+and add one peripheral change per run:
 
 ```
-tmu=3 fps_log=1 panel_sleep=1
 tmu=3 fps_log=1 panel_sleep=1 sleep_cores=1
+tmu=3 fps_log=1 panel_sleep=1 sleep_cores=1 bt=0
+tmu=3 fps_log=1 panel_sleep=1 sleep_cores=1 shub=0
+tmu=3 fps_log=1 panel_sleep=1 sleep_cores=1 mfc=0
+tmu=3 fps_log=1 panel_sleep=1 sleep_cores=1 wifi_pcie=0
 ```
 
 Do not capture a wall-charging run through the PC USB cable: the PC becomes the charger. Charge from the wall
@@ -633,7 +685,7 @@ How to read them:
 | `G3D` at 85 °C and `mali_gov: ... 455 MHz at most now` | the first GPU cap engaged; from here a 572 MHz floor is capped to 455 |
 | battery 42-46 °C while charging, falling to normal with the cable out | charger/battery heat, not the SoC |
 | screen off, no `s6e3ha8: panel_sleep:` line, phone still warm | the panel is still scanning; add `panel_sleep=1` |
-| screen off, `panel_sleep` lines present, still warm | the A55s, GPU idle, Wi-Fi/BT and sensor hub are still running; `sleep_cores=1` and the radios are the next test |
+| screen off, `panel_sleep` lines present, still warm | both `panel_sleep=1` and `sleep_cores=1` have already been tried unplugged and the board centre stayed hot; run the one-peripheral A/B series (`bt=0`, `shub=0`, `mfc=0`, `wifi_pcie=0`), then gate the G3D/display domains |
 
 `tools/analyze-max77705-log.mjs` now reads the `fps:` and `mali: GPU busy` lines too, prints a **Heat** section
 (CPU, GPU, battery, panel), names the likely source above the thresholds, and writes them to CSV/JSON:
@@ -670,9 +722,10 @@ In order, without a kernel patch:
    the 2 ms poller; the INTx path is SPI 253 from `brcmfmac=5`.
 8. **A55 floor:** `cpufreq_gov_lit_min=949000`, then `832000`. Do not start at 598000: core 0 runs the loader's
    UFS service, and a too-low floor can cost more time (and heat) in UFS waits than it saves.
-9. **ABOX diagnostic:** `abox=0` for one run (no audio) with the `console-irq-guard` kernel, same `time_limit=900`.
-   If the centre cools, the step 8 pipeline is a source; do not keep it off if the phone needs audio. iOS may retry
-   its audio service, so judge the run by the `tmu:` zones, not by the case temperature.
+9. **ABOX:** already measured on 12 November. `abox=0` did not cool the idle case (65/64.6 °C screen-off against
+   64/63.6 °C with ABOX normal) and the video was within 1 °C. It is not a heat fix; demand-stop remains
+   architecture/power work. iOS may retry its audio service, so any future run is judged by the `tmu:` zones, not
+   by the case temperature.
 
 The one heat lever that is not a boot arg is hardware video decode: the image carries `fw/mfc_fw.bin`, and the MFC
 driver asks for it before VENDOR (step 3). With `mfc=5`, YouTube no longer decodes on the CPU: the third result has
@@ -699,11 +752,13 @@ changes behaviour on a phone that is already hot.
 - **ABOX demand-stop.** After a silence grace period, stop RDMA0, UAIF1 and the Q-channels and power the AUD
   domain down; on the first iOS frame, re-prime the ring and start the path again. The amplifiers already stop
   after 3 s; the pipeline does not. This is the smaller change than a new DMA interrupt, and the audio start
-  latency/click is the thing to measure.
+  latency/click is the thing to measure. The `abox=0` A/B is negative for idle heat, so this is power and
+  architecture work, not the first thermal fix.
 - **GPU idle gating and G3D OPP.** In normal use the G3D domain and BUCK6 at 950 mV stay on even at 260 MHz.
-  Gate the domain after no jobs for a grace period while the display is off, and power it through the existing
-  PMU/BUCK6 sequence at the first job. Per-OPP voltage needs the G3D ASV/fvmap table; do not copy S-Boot's
-  644 mV, which the source records as a `DATA_INVALID_FAULT` on the S9+.
+  Gate the domain after no jobs for a grace period while the display is off (`g3d_off()` already exists), and
+  power it through the existing `step_power()`/`step_dtzpc()` sequence at the first job. This is the first domain
+  patch: smaller than full suspend and a clean A/B. Per-OPP voltage needs the G3D ASV/fvmap table; do not copy
+  S-Boot's 644 mV, which the source records as a `DATA_INVALID_FAULT` on the S9+.
 - **Native AMP E/P for the A55/M3.** The S9 profile is `BCM2837`, `MAX_CPU_CLUSTERS=1`, `__ARM_AMP__` is
   undefined and the loader writes only `small-core`; `hakios_ml.h` pairs each A55 with an M3 as a slow
   secondary. A real E/P split is a scheduler/topology change, not a boot-arg test.
@@ -716,7 +771,8 @@ changes behaviour on a phone that is already hot.
   device tree's `0x10000` state, cluster power-down, and the panel/DSIM/DECON clocks off. Kernel
   `docs_screen-off-power.md` describes the pieces and the risks. Not a screen-on fix. The 10 November case
   (screen off, `panel_sleep=1` and `sleep_cores=1` already on, still hot unplugged, center of the board) is
-  the evidence: the remaining A55s, uncore and PMIC need a real idle state, not another governor switch.
+  the evidence: the remaining A55s, uncore and PMIC need a real idle state, not another governor switch. It is
+  the structural fix after the G3D and MFC domain measurements, not a replacement for them.
 - **Charger current control (`max77705_chg=auto`).** Set `CNFG_09`/`CNFG_02` from the charger type on VBUS
   attach, off by default, only after a log shows the input limit is the cause. It is a charging fix, not a
   heat fix: lowering the current slows charging and reduces charger heat, but it does not cool a hot SoC.
