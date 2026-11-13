@@ -1020,7 +1020,7 @@ No such line means the host never wrote (wrong COM port, flow control, or anothe
 ```
 $p = [IO.Ports.SerialPort]::new('COM5', 115200, 'None', 8, 'One')
 $p.DtrEnable = $true; $p.Open(); $p.WriteLine('help')
-Start-Sleep -Milliseconds 500; $p.ReadExisting(); $p.Close()
+Start-Sleep -Milliseconds 1000; $p.ReadExisting(); $p.Close()
 ```
 
 The console's commands: `help`, `stat` (the link's counters), `uptime`, `sysctl NAME`, `log` (the kernel's log again from
