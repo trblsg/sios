@@ -196,7 +196,15 @@ jobs:
           for d in starlte star2lte crownlte; do
             make ${d}_defconfig > /dev/null
             rm -f hakios-kernel
-            make kernel JOBS="$(nproc)" > "$W/kernel-$d.log" 2>&1 || { tail -80 "$W/kernel-$d.log"; exit 1; }
+            make kernel JOBS="$(nproc)" > "$W/kernel-$d.log" 2>&1 || {
+              # -j keeps compiling after one file fails, so the diagnostic can be hundreds of lines above the end: say it
+              # here, where the step's annotation can be read, as well as the end of the log for the make summary.
+              echo "::error::the $d kernel did not build"
+              grep -a -n -B3 -A15 -E "(: error:|fatal error:)" "$W/kernel-$d.log" | tail -160 || true
+              echo "== the last 60 lines of $W/kernel-$d.log"
+              tail -60 "$W/kernel-$d.log"
+              exit 1
+            }
             cp hakios-kernel "$W/kernels/kernel-$d"
             grep -a 'drivers built in' "$W/kernel-$d.log" | tail -1 || true
           done
