@@ -604,17 +604,21 @@ tmu=3 fps_log=1 panel_sleep=1 sleep_cores=1 g3d_sleep=1
 tmu=3 fps_log=1 panel_sleep=1 sleep_cores=1 g3d_sleep=1 g3d_sleep_ms=10000
 ```
 
-or flash the first line once (the gate is off) and switch it from the USB console at 10-15 minute intervals:
+or flash the first line once (the gate is off) and switch it from the USB console in 10-15 minute windows:
 
 ```
-sysctl kern.hakios.g3d_sleep=1
+# window 1: baseline, gate off (the boot's g3d_sleep is unset)
+sysctl kern.hakios.g3d_sleep=1          # window 2: 3 s grace
+sysctl kern.hakios.g3d_sleep=0          # back on before the next window
 sysctl kern.hakios.g3d_sleep_ms=10000
-sysctl kern.hakios.g3d_sleep=0
+sysctl kern.hakios.g3d_sleep=1          # window 3: 10 s grace
+sysctl kern.hakios.g3d_sleep=0          # gate off, domain on again
 ```
 
 Each command is acknowledged and logged. `=0` while the domain is off powers it back on at once; if that power-on
 fails the command returns `EIO`, the gate stays on and the next job retries. `=1` wakes the job worker, which at
-260 MHz with no jobs otherwise sleeps with no timeout. The three separate flashes are still the clean confirmation:
+260 MHz with no jobs otherwise sleeps with no timeout. The grace only applies to the next gate, so the 10 s window
+needs the `=0`, `g3d_sleep_ms=10000`, `=1` order. The three separate flashes are still the clean confirmation:
 the board's heat carries over between windows in one run.
 
 Compare the `tmu:` zones at the same uptime, read the `mali: g3d_sleep:` lines for the off and the power-on, and
