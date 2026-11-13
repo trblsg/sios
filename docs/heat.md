@@ -1,6 +1,6 @@
 # Heat on the Galaxy S9
 
-Status: 12 November 2026. This page is the heat side of the "hot, and charging fell from 0.88 A to 0.47 A"
+Status: 13 November 2026. This page is the heat side of the "hot, and charging fell from 0.88 A to 0.47 A"
 report. The first log (12 November) was screen-on and charging and covers two minutes. The second one (the same day,
 "Second hardware result" below) is the first screen-off run: 755 s, the screen off for 4.5 minutes, Safari/YouTube
 after the wake, and a hard reset at 101-102 °C — but it was charging through the PC's 500 mA port with the console
@@ -12,9 +12,13 @@ the third run, so `abox=0` changed nothing measurable; the owner stopped the cap
 still unchecked. The fifth ("Fifth hardware result") adds `mfc_zc=1`: the console fix returned cleanly at 913 s, zero
 copy engaged, and the video band was 6-9 °C cooler (81/78.8 °C at 600 s, 85/81.9 °C at 870 s). But the picture stood
 still: the block's DMA never raised the IOSurface seed, so the compositor kept showing a cached frame. Its 85 °C is
-**not** a valid heat result. The seed is raised in `4fe0b7cd`; the next run checks the picture before the temperature.
-The first G3D screen-off gate is in `e3501e0b` (`g3d_sleep=1`, opt-in, default off), with runtime switches in
-`d836f89c`; it has not been on the phone yet, so it is the first domain patch, not a measured result.
+**not** a valid heat result. The sixth ("Sixth hardware result", 13 November) is the same zero-copy path with the
+seed raised (`4fe0b7cd`): the MFC made H.264 sessions with `error 0`, the GL layer refilled the surfaces, and there
+was no fallback. Its screen-off tail was 80/76.8 °C, but it is not a floor measurement: no `panel_sleep=1
+sleep_cores=1`, only about 50 s with the screen off, and `com.apple.voicemail.vmd` held a core. `vmd=0` leaves that
+daemon out of the next small root. The first G3D screen-off gate is in `e3501e0b` (`g3d_sleep=1`, opt-in, default
+off), with runtime switches in `d836f89c`; it has not been on the phone yet, so it is the first domain patch, not a
+measured result.
 The idle ranking below is now ordered around the power domains and a real suspend: ABOX and polling are measured
 negatives, not the next fixes. The measurements
 before these were made on the development phone ("phone 2") on 5 November, and the constants are from the kernel
@@ -561,6 +565,70 @@ What to run next, one variable at a time:
    surface directly instead of refreshing a BGRA texture, not another MFC change.
 4. **Do not combine** `mfc_zc` with `panel_sleep`/`sleep_cores`; one variable per run.
 
+### Sixth hardware result (13 November): zero copy works; the screen-off heat is `vmd`
+
+Kernel `ga378502a` (`console-irq-guard`), built `Fri Nov 13 15:07:31 UTC 2026`; boot args `... mfc=5 ...
+mfc_zc=1`, `loader_return_after=900`. This run has neither `panel_sleep=1` nor `sleep_cores=1`, and no
+`fps_log=1`: it answers the zero-copy question, and its screen-off tail is a heat-soaked sample, not a floor
+measurement.
+
+**Zero copy is correct this time.** The MFC made H.264 sessions of 640x334 at 200 s and 640x360 at 209 s, each
+with `error 0`; there is no `surfaces of the block's memory are not to be had: copying` line. The GL layer
+refilled the video's surfaces while the picture was up (`6 textures refilled from IOSurfaces (1012 KB)`), the
+five-second summary reached `300 refilled (59.8 a second)`, every frame line says `0 pictures copied out, 1
+drawn in place`, and the run's summary says `0 errors; 0 frames paced, not waited for`. That is the evidence the
+fifth run did not have: the zero-copy path was live and the video's surfaces were being refreshed. The logged GL
+frames are 32-39 ms apart in the video band (about 26-31 fps); without `fps_log=1` the log does not prove the
+player's own cadence, only that the surfaces were updated.
+
+| Uptime | What happened | BIG / LITTLE | Notes |
+|---|---|---|---|
+| 100 s | first app, the peak | 87.0 / 80.9 °C | no video yet |
+| 200 s | video starts | 87.0 / 82.9 °C | 640x334 H.264, `error 0` |
+| 350 s | video, the peak | 93.0 / 90.0 °C | `sum big` 311-327%, A55 455 MHz |
+| 600 s | video | 78.0 / 75.8 °C | `cputop` 149%: `vmd` 102%, `launchd.darwin` 29% |
+| 850 s | lock, the launch spike | 82.0 / 78.8 °C | `cputop` 291%: `backboardd` 73%, `SpringBoard` 39% |
+| 860 s | backlight fading, still on | 85.0 / 81.9 °C | `cputop` 385%: `backboardd` 128%, `SpringBoard` 71% |
+| 864 s | `Set Blanked: YES` + 1 s | 86.0 / 81.9 °C | 0 frames in the last second, off from here |
+| 899 s | screen off + 36 s | 80.0 / 76.8 °C | `cputop` 148%: `vmd` 102%, `launchd.darwin` 29% |
+| 913 s | the run ends | 80 / 76.8 °C (last sample) | orderly return, no panic |
+
+**This is not a 65 °C-floor measurement.** The screen was blanked at about 863 s and the timer returned at 913 s:
+50 seconds, after a video band that peaked at 93/90 °C. With no `panel_sleep=1`, the panel still scans; with no
+`sleep_cores=1`, the M3s stay up. The board is still shedding the video's heat (it fell only from 86/81.9 at
+864 s to 80/76.8 at 899 s), and `cputop` says who is using the cores: `com.apple.voicemail.vmd` at 98-103%,
+`launchd.darwin` at 27-30%, `backboardd` at 11-13% — about 1.5 cores for the whole screen-off tail. Closing the
+apps did not stop any of them.
+
+**`vmd` is the immediate term, not the floor.** `com.apple.voicemail.vmd` is in `/redwood/LaunchDaemons`; the
+job is started on demand (`launching: ipc (mach)`, pid 207) and never exits. It asks for
+`com.apple.commcenter.coretelephony.xpc` every few milliseconds, which is absent because CommCenter is denied,
+so launchd writes a failed lookup each time (`Last log repeated 1784 times` at the end). It was already at
+88-101% at 120 s, before the video, so it is part of the 93/90 °C video band as well as the screen-off tail. The
+102% is `vmd`; `launchd.darwin`'s 27-30% is the failed-lookup log it feeds (`SpringBoard` asks for
+`com.apple.commcenter.xpc` too, so some of that may remain after `vmd` is gone). It cannot work on this port:
+voicemail needs CommCenter, and CommCenter needs the cellular IOKit drivers this kernel has not got.
+
+The fix is `vmd=0`, passed in `boot_args`. The installer workflow reads it when it builds the small root and sets
+`VMD=0` for `userland/build.sh`; `mkjobs.py` then adds `voicemail` to `DENY`, so the plist is not in
+`root.apfs` and launchd never has a job to start. It is a build-time change: a new image is needed, and
+`ALLOW=voicemail` in the userland build keeps the job for an A/B. It is not in `configs/starlte.config`.
+
+What to run next, one variable at a time:
+
+1. **Clean screen-off baseline after `vmd` is gone.** `time_limit=0` or `3000`, boot args
+   `tmu=3 fps_log=1 panel_sleep=1 sleep_cores=1 vmd=0`, no `mfc_zc`. Boot, leave the screen on and idle for
+   10-15 minutes to settle, lock it, then measure 10-15 minutes. Compare the `tmu: 8 sensors` zones and
+   `cputop` at the same uptime with the 64-67 °C floor runs; this is the first screen-off run without the
+   voicemail retry storm.
+2. **The `vmd` A/B, if wanted:** the same boot args once with `vmd=0` and once without; two images, because the
+   token is read when the small root is built. Same workload, same uptime; compare `cputop` and `tmu`. Do not
+   combine it with `panel_sleep`/`sleep_cores` or `mfc_zc` in the same step.
+3. **G3D A/B only after that baseline:** `sysctl kern.hakios.g3d_sleep=1`, watch the gate and power-on
+   lines, then `=0`; the 10 s grace sequence is `=0`, `g3d_sleep_ms=10000`, `=1`.
+4. **If video pacing is the question,** add `fps_log=1` to the same zero-copy run. The current log has no
+   `fps:` line, so it cannot say whether the player was at 30 fps; it can only say the surfaces were refreshed.
+
 ### The idle floor: what the A/B runs have ruled out (12 November)
 
 The 10 November case is still the one to solve: screen off, unplugged, every app closed, brightness at its
@@ -574,8 +642,10 @@ minimum, the mainboard hot in the centre. These results narrow it:
 | software decode vs MFC | 101-102 °C and a hard reset vs 96 °C peak | MFC as an idle fix; it is a video-load fix |
 | screen off, M3 6-15% busiest, A55 1053 MHz at near-zero load | 64-67 °C | load and governor as the idle source; the remaining power is in domains, uncore and memory |
 
-The fifth run does not change this table: its video was frozen, so its 6-9 °C is not a heat result. Wait for
-`4fe0b7cd` to show moving video before using its temperature.
+The fifth run does not change this table: its video was frozen, so its 6-9 °C is not a heat result. The sixth run
+has live zero-copy video, but it still does not test the floor: it has no `panel_sleep=1 sleep_cores=1`, its
+screen-off tail is about 50 s, and `vmd` was loading a core throughout. Remove `vmd` and run the clean screen-off
+baseline above before using the sixth run's 80/76.8 °C as a floor.
 
 No single peripheral has been removed yet, so the next step is diagnostic, not a patch. Run each of these
 unplugged from a cool start, lock after 10-15 minutes of settling, one per run, and compare the `tmu:` zones at
@@ -644,6 +714,10 @@ replaces the earlier one: ABOX and polling are no longer near the top, because t
 | 9 | Camera/ISP | Lazy since 5 November, but a reader still starts it |
 | 10 | Scheduler/M3 | Slow-secondary pairing, not native AMP; a longer-term placement issue |
 | 11 | Thermal pressure | Makes iOS reduce work under load; not an idle heat source |
+
+One term sits outside the ranking because it is not the floor and not a boot-time power domain: the sixth result's
+`com.apple.voicemail.vmd` holds about one core and drives `launchd.darwin` while the screen is off. Remove it with
+`vmd=0` before the next screen-off measurement; with it gone, the ranking below is the list to work through.
 
 The low-risk implementation order is different:
 
@@ -741,6 +815,149 @@ Its thresholds are deliberately simple: CPU if the big zone is at least 78 °C a
 display-off event has no `panel_sleep` line. A log that meets none of them is not "cool"; it means the source is
 not one of those four and the radios, camera, sensor hub or charger deserve the next run.
 
+## A timed run: 900 s, and the log it leaves
+
+`time_limit=900` is the installer's `-t 900`: `mkinstaller.sh` puts `loader_return_after=900` in the boot arguments,
+and `loader_return_timer_init()` (`osfmk/arm64/loader_return.c`) schedules the return 900 s after early boot. The phone
+restarts into TWRP by itself, and the loader's pstore record holds the end of the log. The console's `return` is the
+same way out by hand. A 900 s run is for one picture or one thermal band: two 10-15 minute screen-off windows plus
+settling do not fit in it, so the G3D A/B below uses `time_limit=0` (manual `return`) or `3000`.
+
+### 1. The workflow
+
+Actions > **s9-installer** > Run workflow
+(`https://github.com/trblsg/sios/actions/workflows/s9-installer.yml`), with:
+
+| Input | Value |
+|---|---|
+| `kernel_ref` | `console-irq-guard` (head `ea3e2419`: the seed fix `4fe0b7cd`, the G3D gate `e3501e0b`, the runtime sysctls `d836f89c`, the `vmd=0` small-root switch) |
+| `packaging_ref` | `main` |
+| `partition` | `SYSTEM` |
+| `boot_args` | `s6sy761_irq=1 brcmfmac_poll=0 abox=0 mfc_zc=1` |
+| `time_limit` | `900` |
+| `tweaks` | on |
+| `userdata_blocks` | `starlte=13917184` |
+
+Paste the `boot_args` line exactly, with no `boot_args:` prefix and no quotes. The workflow puts its own
+`starlte=shub=6 bt=7` in front; do not repeat them. `mfc=5`, `mali=9` and `mali_gov=1` are `configs/starlte.config`
+defaults, so this line adds only `mfc_zc=1` to the fifth run's arguments. `abox=0` is kept for comparability, not
+because it cools (the fourth result says it does not). Do not add `g3d_sleep=1` here: the zero-copy picture comes
+first, and the gate is a separate A/B.
+
+The job takes about two hours; the artifact is kept for three days.
+
+### 2. Download, decrypt, verify
+
+Download `scion-exynos9810-installer-format-userdata` from the run page. It is a 7z archive with encrypted file names;
+the passphrase is the repository secret `INSTALLER_PASSPHRASE`. On Windows, with 7-Zip installed:
+
+```
+"C:\Program Files\7-Zip\7z.exe" x scion-exynos9810-installer-format-userdata.7z
+```
+
+The archive holds the zip, `SHA256SUMS` and `README.txt`. Check the zip:
+
+```
+certutil -hashfile scion-exynos9810-installer-format-userdata.zip SHA256
+type SHA256SUMS
+```
+
+The hash must match the first field of `SHA256SUMS` (case does not matter). On Linux/macOS: `sha256sum -c SHA256SUMS`.
+
+### 3. Back up and flash
+
+**The installer formats USERDATA and erases Android's data** (apps, photos, accounts). In TWRP, back up Boot,
+`SYSTEM`, EFS and USERDATA, and copy the backup off the phone first. Keep the zip off internal storage: formatting
+USERDATA unmounts `/sdcard`, and the zip reads itself while it formats. Use a microSD card or a USB OTG drive, or put
+it in TWRP's RAM:
+
+```
+adb shell mount -o remount,size=3G /tmp
+adb push scion-exynos9810-installer-format-userdata.zip /tmp/
+adb shell twrp install /tmp/scion-exynos9810-installer-format-userdata.zip
+```
+
+Do not unpack the zip; keep `format-userdata` in its name. `adb sideload` does not work (TWRP's sideload host keeps
+the size in 32 bits). The README inside the archive has the same steps.
+
+### 4. Capture the console from the first line
+
+The full log is the USB console, not pstore: pstore is 16 KB per record (the loader's head and the kernel's tail).
+Attach the phone to the PC before the run if the PC port is the charger you want to measure (runs 3-5 did). For an
+unplugged run, let it run, then plug in and type `log`: it replays the kernel's log from its start, but the 1 MB USB
+output ring may drop bytes if the replay is larger than the ring, so the live capture from boot is the complete one.
+
+On Windows the phone is `USB Serial Device (COMx)` (1209:0001) in Device Manager. In PuTTY:
+
+- `Session` > `Serial`; `Serial line` `COMx`; `Speed` `115200`.
+- `Connection` > `Serial`: `Data bits` 8, `Stop bits` 1, `Parity` None, `Flow control` **None**.
+- `Terminal`: `Local line editing` **Force off**; `Local echo` **Force on** (the phone echoes the line again).
+- `Session` > `Logging`: `All session output`, a fresh file such as `C:\Users\ADMIN\Documents\GitHub\sios\putty-900.log`.
+
+Open the port as soon as it appears, before the kernel writes much; if you connect late, `log` replays what the
+kernel still holds (the replay may be truncated by the 1 MB ring). There is no prompt and no echo until Enter: type
+`help` and Enter; the answer is `usb> help` and the command list. If
+nothing is answered, the kernel at `8901f8c3` or later prints the host's first bytes in hex; a line without `usb> help`
+means the bytes did not end a line. Only one program may hold the port.
+
+### 5. The 900 s timeline
+
+The timer runs on kernel uptime, not on when the video starts; use the console's `uptime` and the log's
+`cpufreq_gov: N s:` lines. For the zero-copy picture check:
+
+| Uptime | Do | Look for |
+|---|---|---|
+| 0-100 s | boot; `help`; `sysctl kern.hakios.g3d_sleep`; `sysctl kern.hakios.g3d_sleep_ms`; `log` once; `stat` | `usb> help`; `... g3d_sleep = 0`, `... g3d_sleep_ms = 3000` (ENOENT means the image is old); `mali: came up to step 9 of 9` and `(mali_gov)` in the `fps:` lines; `stat` shows the link's counters and `0 lost` |
+| ~100 s | the first app; its peak is expected | `91 °C` in the fifth run, not the video |
+| ~300 s | open YouTube and play the same 640x360 H.264 video as the fifth run | the picture must move; the test page's `mfc_vt` must not repeat |
+| 400 s, 600 s, 870 s | `uptime` (and `stat` if wanted); leave the video playing | `usb: up N s`; `cpufreq_gov`, `tmu: 8 sensors` and `fps:` lines continue |
+| ~900 s | nothing; the timer returns | `--- loader_return_after expired ---`, `ufs: nufs: summary`, `brcmfmac: the run ends in order`, `--- loader_return() ---`; the COM port disappears |
+
+`sysctl kern.hakios.mali` is not readable from the console (it is not `CTLFLAG_KERN`); use the `log` lines. `stat` is
+the USB link's counters, not the Wi-Fi `wifi stat`. If the phone does not return by ~920 s, the tail says where it
+stopped; five fingers for 1.5 s (or Vol Down + Power) returns to TWRP.
+
+### 6. The pstore in TWRP
+
+When the phone is in TWRP, the console's COM port is gone and adb is back:
+
+```
+adb devices
+adb shell ls -l /sys/fs/pstore
+adb pull /sys/fs/pstore/pmsg-ramoops-0 s9-900-pmsg.txt
+adb pull /sys/fs/pstore/dmesg-ramoops-0 s9-900-dmesg.txt
+```
+
+`pmsg-ramoops-0` is the loader's head and the kernel's tail; `dmesg-ramoops-0` is the start. They are small (16 KB
+each) and do not replace the PuTTY capture. If no file appears, `adb shell cat /sys/module/ramoops/parameters/*`
+and the `log_pstore` node say how the zones are laid out.
+
+### 7. Read the log
+
+```
+node tools/analyze-max77705-log.mjs s9-900.log
+node tools/analyze-max77705-log.mjs --csv s9-900.csv --json s9-900.json s9-900.log
+```
+
+The tool prints the **Heat** section and writes the samples. The lines that decide the run:
+
+```
+grep -E "cpufreq_gov: [0-9]+ s:|tmu: 8 sensors|fps:|mali: GPU busy|cputop:" s9-900.log
+```
+
+On Windows:
+`Select-String -Path s9-900.log -Pattern 'cpufreq_gov: \d+ s:|tmu: 8 sensors|fps:|mali: GPU busy|cputop:'`.
+
+For the zero-copy run, read the picture before the temperature: the video must move, the test page's `mfc_vt` must not
+repeat a frame, the per-frame GL line must show `refilled` during the video (`hakios-gl: frame ... textures refilled
+from IOSurfaces`) and must not stay at the fifth run's `0 textures refilled`. A frozen picture invalidates the
+temperature, as the fifth result says. If the picture moves, compare 600 s and 870 s with the fourth run (88/86 °C and
+94/91 °C); zero copy should be above the invalid 85 °C.
+
+The G3D A/B is separate: build `time_limit=0` or `3000` with `tmu=3 fps_log=1 panel_sleep=1 sleep_cores=1`, boot,
+settle 10-15 minutes, lock the screen, then switch `kern.hakios.g3d_sleep` in 10-15 minute windows as in "The idle
+floor" above. `=0` while the domain is off brings it back at once; the clean confirmation is still one flash per line.
+
 ## What can be changed today
 
 In order, without a kernel patch:
@@ -767,6 +984,12 @@ In order, without a kernel patch:
    64/63.6 °C with ABOX normal) and the video was within 1 °C. It is not a heat fix; demand-stop remains
    architecture/power work. iOS may retry its audio service, so any future run is judged by the `tmu:` zones, not
    by the case temperature.
+10. **Voicemail daemon:** add `vmd=0` to `boot_args` when building the next image. The workflow passes `VMD=0` to
+    `userland/build.sh`, and `mkjobs.py` leaves `com.apple.voicemail.vmd` out of `root.apfs`: the daemon cannot
+    work without CommCenter, and in the sixth result it held 102% of a core screen-off and made `launchd.darwin`
+    write the same failed lookup. It is a build-time change (new image), not a runtime switch; `ALLOW=voicemail`
+    in the userland build keeps it for an A/B. Do not count it as the 65 °C floor until the clean screen-off run
+    above has been made.
 
 With a kernel at `e3501e0b` or later, the first G3D gate is also a boot arg, opt-in: `g3d_sleep=1` (it needs
 `mali_gov=1`, which `configs/starlte.config` already sets) with `g3d_sleep_ms=3000` by default. From `d836f89c` the
