@@ -13,8 +13,8 @@ still unchecked. The fifth ("Fifth hardware result") adds `mfc_zc=1`: the consol
 copy engaged, and the video band was 6-9 °C cooler (81/78.8 °C at 600 s, 85/81.9 °C at 870 s). But the picture stood
 still: the block's DMA never raised the IOSurface seed, so the compositor kept showing a cached frame. Its 85 °C is
 **not** a valid heat result. The seed is raised in `4fe0b7cd`; the next run checks the picture before the temperature.
-The first G3D screen-off gate is in `e3501e0b` (`g3d_sleep=1`, opt-in, default off) and has not been on the phone
-yet; it is the first domain patch, not a measured result.
+The first G3D screen-off gate is in `e3501e0b` (`g3d_sleep=1`, opt-in, default off), with runtime switches in
+`d836f89c`; it has not been on the phone yet, so it is the first domain patch, not a measured result.
 The idle ranking below is now ordered around the power domains and a real suspend: ABOX and polling are measured
 negatives, not the next fixes. The measurements
 before these were made on the development phone ("phone 2") on 5 November, and the constants are from the kernel
@@ -594,14 +594,28 @@ floor, and the rest is the A55/uncore/memory interconnect plus the G3D/display d
 (`cpufreq_gov_lit_min=949000`, then `832000`) is a useful cross-check: a 1-2 °C change confirms that clock rate
 is not the lever and that deep idle is the missing piece.
 
-The first domain A/B is the G3D gate in `e3501e0b`. Keep `panel_sleep=1 sleep_cores=1` as the screen-off baseline
-and add one of these, unplugged after 10-15 minutes of settling:
+The first domain A/B is the G3D gate, in `e3501e0b`; the runtime switches are in `d836f89c`. Keep
+`panel_sleep=1 sleep_cores=1` as the screen-off baseline. Either flash one image per line, unplugged after 10-15
+minutes of settling:
 
 ```
 tmu=3 fps_log=1 panel_sleep=1 sleep_cores=1
 tmu=3 fps_log=1 panel_sleep=1 sleep_cores=1 g3d_sleep=1
 tmu=3 fps_log=1 panel_sleep=1 sleep_cores=1 g3d_sleep=1 g3d_sleep_ms=10000
 ```
+
+or flash the first line once (the gate is off) and switch it from the USB console at 10-15 minute intervals:
+
+```
+sysctl kern.hakios.g3d_sleep=1
+sysctl kern.hakios.g3d_sleep_ms=10000
+sysctl kern.hakios.g3d_sleep=0
+```
+
+Each command is acknowledged and logged. `=0` while the domain is off powers it back on at once; if that power-on
+fails the command returns `EIO`, the gate stays on and the next job retries. `=1` wakes the job worker, which at
+260 MHz with no jobs otherwise sleeps with no timeout. The three separate flashes are still the clean confirmation:
+the board's heat carries over between windows in one run.
 
 Compare the `tmu:` zones at the same uptime, read the `mali: g3d_sleep:` lines for the off and the power-on, and
 check the first frame after wake (and a scroll) before keeping it. A gate that never fires leaves the log without
@@ -650,7 +664,10 @@ The low-risk implementation order is different:
 
 ## The log that names the source
 
-Use the installer workflow's `boot_args` input. Nothing below needs a kernel rebuild. `fps_log=1` is the one
+Use the installer workflow's `boot_args` input. Nothing below needs a code change, but a `boot_args` line is baked into
+the boot image's payload, so each one is a new installer run (the same `kernel_ref`; the workflow rebuilds, there is no
+boot-args file on the phone). Where a runtime sysctl exists, one image covers the A/B: the G3D gate is the first one
+(`kern.hakios.g3d_sleep`, `kern.hakios.g3d_sleep_ms`). `fps_log=1` is the one
 addition to the earlier charging recipe; it prints the GPU once a second.
 
 Baseline (screen on, the workload that gets hot, Wi-Fi/BT in the state being judged):
@@ -705,6 +722,7 @@ How to read them:
 | screen off, `panel_sleep` lines present, still warm | both `panel_sleep=1` and `sleep_cores=1` have already been tried unplugged and the board centre stayed hot; run the one-peripheral A/B series (`bt=0`, `shub=0`, `mfc=0`, `wifi_pcie=0`), then gate the G3D/display domains |
 | `mali: g3d_sleep: no job and no frame for ...: the G3D goes off` | the gate fired; the next line says the domain is off and the first job will power it on |
 | `mali: g3d_sleep: the G3D is on again after N ms` | the first job after the gate powered the domain back; N is the wake latency to compare with the run without it |
+| `mali: g3d_sleep=1: the gate is on ...` / `mali: g3d_sleep=0: the gate is off` | the runtime switch from the console; `=0` also powers the domain back on if it was off |
 
 `tools/analyze-max77705-log.mjs` now reads the `fps:` and `mali: GPU busy` lines too, prints a **Heat** section
 (CPU, GPU, battery, panel), names the likely source above the thresholds, and writes them to CSV/JSON:
@@ -747,7 +765,9 @@ In order, without a kernel patch:
    by the case temperature.
 
 With a kernel at `e3501e0b` or later, the first G3D gate is also a boot arg, opt-in: `g3d_sleep=1` (it needs
-`mali_gov=1`, which `configs/starlte.config` already sets) with `g3d_sleep_ms=3000` by default. It is deliberately
+`mali_gov=1`, which `configs/starlte.config` already sets) with `g3d_sleep_ms=3000` by default. From `d836f89c` the
+same two are writable at run time: `sysctl kern.hakios.g3d_sleep=0|1` and `sysctl kern.hakios.g3d_sleep_ms=500..60000`
+on the USB console. It is deliberately
 not in `configs/starlte.config`: run the A/B in "The idle floor" before keeping it.
 
 The one heat lever that is not a boot arg is hardware video decode: the image carries `fw/mfc_fw.bin`, and the MFC
@@ -781,7 +801,9 @@ changes behaviour on a phone that is already hot. The G3D gate is the exception:
 - **GPU idle gating and G3D OPP.** `g3d_sleep=1` is implemented (with `mali_gov=1`; `g3d_sleep_ms` sets the grace,
    default 3000, 500..60000). It powers the domain off through `g3d_off()` after no GPU job and no frame for the
    grace, and brings it back through `step_power()`/`step_dtzpc()`, a reset, the cores and address space 0 at the
-   first job. It also skips the MMU update while the domain is off, since the power-on does one full update. It is
+   first job. It also skips the MMU update while the domain is off, since the power-on does one full update. From
+   `d836f89c` both knobs change at run time (`sysctl kern.hakios.g3d_sleep`, `...g3d_sleep_ms`), so one image can
+   do the A/B. It is
    the first domain patch: smaller than full suspend and a clean A/B, but it has not been run on the phone yet.
    Per-OPP voltage still needs the G3D ASV/fvmap table; do not copy S-Boot's 644 mV, which the source records as a
    `DATA_INVALID_FAULT` on the S9+.
