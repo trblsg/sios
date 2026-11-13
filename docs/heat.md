@@ -9,7 +9,11 @@ with hardware video decode working: 900 s, peak 96.0 °C, and a return to the lo
 panic in the console policy on the way out, not a thermal reset; the driver fix is described there. The fourth
 ("Fourth hardware result") is the console fix with `abox=0`: 601 s of log, 88 °C in the video band, within 1-2 °C of
 the third run, so `abox=0` changed nothing measurable; the owner stopped the capture at 601 s, so the 900 s return is
-still unchecked. The measurements
+still unchecked. The fifth ("Fifth hardware result") adds `mfc_zc=1`: the console fix returned cleanly at 913 s, zero
+copy engaged, and the video band was 6-9 °C cooler (81/78.8 °C at 600 s, 85/81.9 °C at 870 s). But the picture stood
+still: the block's DMA never raised the IOSurface seed, so the compositor kept showing a cached frame. Its 85 °C is
+**not** a valid heat result. The seed is raised in `4fe0b7cd`; the next run checks the picture before the temperature.
+The measurements
 before these were made on the development phone ("phone 2") on 5 November, and the constants are from the kernel
 tree as it is on 12 November. The charging side — `CNFG_09`, AICL, the CV taper and the four cases — is in
 [power-charging.md](power-charging.md).
@@ -484,7 +488,8 @@ phone did not reset; the run was cut short, so the console fix's clean return at
 
 What to run next, one variable at a time:
 
-1. **Next build: `console-irq-guard` head `fa4ced23`, `abox=0 mfc_zc=1`, `time_limit=900`.** The head adds
+1. **The build this list asked for was run as the fifth result below: `console-irq-guard` head `fa4ced23`,
+   `abox=0 mfc_zc=1`, `time_limit=900`.** The head adds
    `/redwood/bin/cputop 5 &` to the demo job list, so every run now logs `cputop: N s: ...% in all: <process> ...%`
    every 5 s; the heat runs need the owner of the 2-3 cores the `cpufreq_gov` line reports. This one run does three
    things: the first full 900 s return (the console fix), the zero-copy copy-path test, and the per-process
@@ -497,6 +502,51 @@ What to run next, one variable at a time:
    copyout is only about 10 MB/s, so it is not the big term by itself.
 3. **The screen-off test** stays next for the unplugged case: `panel_sleep=1` first, `sleep_cores=1` in a later run,
    after 10-15 minutes of settling, unplugged or on a 5 V/2 A source.
+4. **Do not combine** `mfc_zc` with `panel_sleep`/`sleep_cores`; one variable per run.
+
+### Fifth hardware result (12 November): zero copy engaged, the picture stood still
+
+Kernel `gfa4ced23` (`console-irq-guard`); boot args `s6sy761_irq=1 brcmfmac_poll=0 abox=0 mfc_zc=1`,
+`loader_return_after=900`. (The CI input carried a stray `oot_args:` prefix before the first argument; the arguments
+took effect.) The console fix is verified: `--- loader_return_after expired ---` at 913 s, `ufs: nufs: summary (the run
+is ending, up 913 s)`, `brcmfmac: the run ends in order`, `--- loader_return() ---`, no panic. The zero-copy path
+engaged: the MFC sessions at 378 and 386 s are 640x360, with no `surfaces of the block's memory are not to be had:
+copying` line; during the video the GL layer logged `0 textures refilled` and `1 picture drawn in place`, and the run's
+summary was `408 IOSurfaces were the textures' memory, 872 had to be copied`.
+
+| Uptime | What happened | BIG / LITTLE | Notes |
+|---|---|---|---|
+| 100 s | first app, the peak | 91.0 / 82.9 °C | no video yet |
+| 378-386 s | YouTube, two H.264 sessions | 80-85 / 78-82 °C | zero copy: no fallback line |
+| 550 s | `cputop` during the video | 80.0 / 77.8 °C | 201% in all: `backboardd` 111%, `mediaserverd` 43%, `com.apple.WebKit.GPU` 19%, `com.apple.WebKit.WebContent` 19%, `MobileSafari` 5%; 200-224% over the band |
+| 600 s | video | 81.0 / 78.8 °C | against 88.0 / 86.0 °C in the fourth run |
+| 870 s | video | 85.0 / 81.9 °C | against 94 / 91 °C in the fourth run |
+| 913 s | the run ends | 85 / 81.9 °C | orderly teardown; no panic |
+
+**The 6-9 °C is not a heat result: the picture stood still.** The owner saw a frozen/repeating video, not moving frames.
+The block writes the frame into the surface by DMA, which is not an IOSurface lock, so the surface's seed never rose;
+the compositor (eagl's textures, and any shadow keyed on `IOSurfaceGetSeed`) saw the same seed and never loaded the new
+frame. The copy path raised it every frame because `decode_unit()` locked the pixel buffer. With the picture frozen the
+compositor was not copying the video frames at all, so the temperature measured a pipeline that was not showing the
+video.
+
+**The fix is `4fe0b7cd`** on `trblsg/s-kernel` `console-irq-guard`: in the zero-copy branch of `decode_unit()`, after the
+ioctl returns and before the frame is emitted, `IOSurfaceLock(surface, 0, NULL)` / `IOSurfaceUnlock(surface, 0, NULL)`
+raises the shared seed exactly as the copy path's `CVPixelBufferLockBaseAddress` does. No kernel change is needed; the
+trap is the one `surf_test` checks (`IOSurfaceGetSeed` changes after a write lock, not after a read-only one).
+
+What to run next, one variable at a time:
+
+1. **`console-irq-guard` head `4fe0b7cd`, the same boot args, `time_limit=900`.** Check the picture and the frame count
+   before reading any temperature: the video must move, `mfc_vt` must not repeat a frame, and the GL line must show
+   refills during the video (the seed now changes). The kernel copyout is still gone; the compositor's refill is not, so
+   expect a temperature **above** the invalid 85 °C, and compare it with the fourth run's 88/86 °C at 600 s and 94/91 °C
+   at 870 s.
+2. **If the picture moves and the temperature is still below the copy path's**, zero copy stays; the next variable is
+   `panel_sleep=1` for the screen-off case, then `sleep_cores=1` in a later run.
+3. **If the picture moves and the temperature returns to 88+ °C**, the remaining term is the compositor's refill of the
+   video surface (the same copy the copy path paid); the next change would be to let the GL layer sample the NV12
+   surface directly instead of refreshing a BGRA texture, not another MFC change.
 4. **Do not combine** `mfc_zc` with `panel_sleep`/`sleep_cores`; one variable per run.
 
 ### Two orders, not one
