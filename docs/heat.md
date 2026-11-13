@@ -621,9 +621,10 @@ What to run next, one variable at a time:
    10-15 minutes to settle, lock it, then measure 10-15 minutes. Compare the `tmu: 8 sensors` zones and
    `cputop` at the same uptime with the 64-67 °C floor runs; this is the first screen-off run without the
    voicemail retry storm.
-2. **The `vmd` A/B, if wanted:** the same boot args once with `vmd=0` and once without; two images, because the
-   token is read when the small root is built. Same workload, same uptime; compare `cputop` and `tmu`. Do not
-   combine it with `panel_sleep`/`sleep_cores` or `mfc_zc` in the same step.
+2. **The `vmd` A/B, if wanted:** two images with the same boot args
+   (`tmu=3 fps_log=1 panel_sleep=1 sleep_cores=1`), one with `vmd=0` and one without; change only `vmd`. Two
+   images, because the token is read when the small root is built. Compare `cputop` and `tmu` at the same uptime.
+   Do not add `mfc_zc` to either.
 3. **G3D A/B only after that baseline:** `sysctl kern.hakios.g3d_sleep=1`, watch the gate and power-on
    lines, then `=0`; the 10 s grace sequence is `=0`, `g3d_sleep_ms=10000`, `=1`.
 4. **If video pacing is the question,** add `fps_log=1` to the same zero-copy run. The current log has no
