@@ -13,6 +13,8 @@ still unchecked. The fifth ("Fifth hardware result") adds `mfc_zc=1`: the consol
 copy engaged, and the video band was 6-9 °C cooler (81/78.8 °C at 600 s, 85/81.9 °C at 870 s). But the picture stood
 still: the block's DMA never raised the IOSurface seed, so the compositor kept showing a cached frame. Its 85 °C is
 **not** a valid heat result. The seed is raised in `4fe0b7cd`; the next run checks the picture before the temperature.
+The first G3D screen-off gate is in `e3501e0b` (`g3d_sleep=1`, opt-in, default off) and has not been on the phone
+yet; it is the first domain patch, not a measured result.
 The idle ranking below is now ordered around the power domains and a real suspend: ABOX and polling are measured
 negatives, not the next fixes. The measurements
 before these were made on the development phone ("phone 2") on 5 November, and the constants are from the kernel
@@ -27,7 +29,7 @@ The S9 under HakiOS has several independent heat sources, and the kernel sees on
 |---|---|---|---|
 | CPU, big cluster | `gov_policy=2` (the S9 default) keeps all four M3s online and allows 1794 MHz; the touch floor is 1469 MHz, the frame floor 1261 MHz while frames are moving | a ceiling that steps down from 83 °C, lowest level at 96 °C, back under 78 °C | `cpufreq_gov: ... big N MHz load N% ... temp big N C` |
 | CPU, little cluster | four A55s, floor 1053 MHz (core 0 runs the loader's UFS service and is not counted as load); touch floor 1248 MHz under the scion law | same ceiling law from 76 °C, back under 71 °C | the same line, `lit ...` |
-| GPU | `mali_gov=1`, 260/455/572 MHz; **572 MHz floor whenever a frame arrived in the last 100 ms**, even at 10 fps and low busy | 455 MHz at G3D 85 °C, 260 MHz at 95 °C; the floor is applied **before** the cap | `fps: ... gpu: ... MHz ... G3D N C`, `mali: GPU busy`, `mali: mali_gov: the G3D at ...` |
+| GPU | `mali_gov=1`, 260/455/572 MHz; **572 MHz floor whenever a frame arrived in the last 100 ms**, even at 10 fps and low busy | 455 MHz at G3D 85 °C, 260 MHz at 95 °C; the floor is applied **before** the cap; the G3D domain and BUCK6 stay on unless `g3d_sleep=1` (opt-in, unvalidated) | `fps: ... gpu: ... MHz ... G3D N C`, `mali: GPU busy`, `mali: mali_gov: the G3D at ...`, `mali: g3d_sleep:` |
 | Video decode | without the MFC firmware, VideoToolbox decoded H.264/HEVC on the M3s (the VENDOR partition is EROFS, so step 3 failed) | `mfc=5` with `fw/mfc_fw.bin`: the MFC decodes, VideoToolbox registers `avc1` and `hvc1` | `exynos_mfc: 3:`, `hakios: mediaserverd: the MFC's decoder registered for 'avc1'` |
 | Panel | the S6E3HA8 keeps scanning and DSIM/DECON stay up; brightness is AOR dimming, not an off switch; no system sleep and no CPU_SUSPEND | nothing unless `panel_sleep=1`; `sleep_cores=1` only after screen off | `GenericARMPE: the display off/on`, `s6e3ha8: panel_sleep:` |
 | Charger / battery | 5 V input, `CNFG_09`/`CNFG_02`, a 2018 cell; the charger adds heat on top of the SoC | only the watchdog is ever written (`max77705_wdt=1`); no current limit is set | `max77705:` lines |
@@ -274,12 +276,12 @@ screen-off against 64/63.6 °C with ABOX normal, video within 1 °C) says it wil
 power/architecture work now, not the first thermal fix.
 
 The GPU is frequency-DVFS only. `mali_gov=1` switches PLL_G3D between 260/455/572 MHz, but step 2 raises
-BUCK6/vdd_g3d to 950 mV and the G3D domain stays on; in normal operation `g3d_off()` is only the undo path at
+BUCK6/vdd_g3d to 950 mV and the G3D domain stays on; without `g3d_sleep=1`, `g3d_off()` is only the undo path at
 unload. At 260 MHz the rail is still 950 mV. Do not copy S-Boot's 644 mV: the source records
-`DATA_INVALID_FAULT` on the S9+ at that combination. The safe first step is screen-off idle gating: after no
-jobs for a grace period (and only when the display is off), run the existing `g3d_off()` path; power on through
-the existing PMU/BUCK6 sequence at the first job. Voltage-per-OPP from the G3D ASV/fvmap is the second step,
-not a blind write.
+`DATA_INVALID_FAULT` on the S9+ at that combination. The first domain patch is now in the tree: `g3d_sleep=1` (with
+`mali_gov=1`) waits `g3d_sleep_ms` with no GPU job and no frame, runs the existing `g3d_off()` path and brings the
+domain back through `step_power()`/`step_dtzpc()` at the first job. It is opt-in, new in `e3501e0b`, and has no
+hardware result yet. Voltage-per-OPP from the G3D ASV/fvmap is the second step, not a blind write.
 
 Two corrections to the earlier notes:
 
@@ -592,6 +594,20 @@ floor, and the rest is the A55/uncore/memory interconnect plus the G3D/display d
 (`cpufreq_gov_lit_min=949000`, then `832000`) is a useful cross-check: a 1-2 °C change confirms that clock rate
 is not the lever and that deep idle is the missing piece.
 
+The first domain A/B is the G3D gate in `e3501e0b`. Keep `panel_sleep=1 sleep_cores=1` as the screen-off baseline
+and add one of these, unplugged after 10-15 minutes of settling:
+
+```
+tmu=3 fps_log=1 panel_sleep=1 sleep_cores=1
+tmu=3 fps_log=1 panel_sleep=1 sleep_cores=1 g3d_sleep=1
+tmu=3 fps_log=1 panel_sleep=1 sleep_cores=1 g3d_sleep=1 g3d_sleep_ms=10000
+```
+
+Compare the `tmu:` zones at the same uptime, read the `mali: g3d_sleep:` lines for the off and the power-on, and
+check the first frame after wake (and a scroll) before keeping it. A gate that never fires leaves the log without
+those lines; a power-on that cannot finish leaves `mali: g3d_sleep: ... did not ...: no job is run` and a frozen
+picture, which is a failed run, not a cooler one.
+
 ### Two orders, not one
 
 Heat impact for the screen-off, unplugged, centre-hot case is not the same as implementation risk. This ranking
@@ -600,7 +616,7 @@ replaces the earlier one: ABOX and polling are no longer near the top, because t
 | Rank | Heat impact | Why it is here |
 |---|---|---|
 | 1 | No system sleep: no `CPU_SUSPEND`, no cluster power-down (CPD) or SoC idle clock-down (SICD); remaining A55s, uncore, PMIC | The whole SoC stays powered and leaks; `sleep_cores=1` only removes the M3s |
-| 2 | GPU G3D domain and BUCK6 950 mV | Frequency falls to 260 MHz, but the domain stays on and the rail stays at 950 mV; leakage does not follow frequency |
+| 2 | GPU G3D domain and BUCK6 950 mV | Frequency falls to 260 MHz, but without `g3d_sleep=1` the domain stays on and the rail stays at 950 mV; leakage does not follow frequency |
 | 3 | DECON/DSIM and the display domain | `panel_sleep=1` puts the panel in sleep-in, but the supplies, Q-channel and display clocks are not proven off |
 | 4 | A55 cluster, SoC uncore, memory interconnect | The M3s have been `CPU_OFF` and the board centre stayed hot; A55 sits at 1053 MHz with near-zero load screen-off |
 | 5 | Radios: BT + Wi-Fi/PCIe + sensor hub | `bt=7` keeps the chip powered; Wi-Fi/PCIe is up; `shub=6` keeps the hub MCU and six streams; the one-peripheral A/B is pending |
@@ -615,9 +631,10 @@ The low-risk implementation order is different:
 
 1. **Unplugged A/B series, no patch:** `bt=0`, `shub=0`, `mfc=0`, `wifi_pcie=0`, one per run. If each is 0-2 °C,
    no single peripheral causes the floor.
-2. **G3D screen-off power gating (first patch):** after display off and no GPU job for a grace period, run the
-   existing `g3d_off()` path and return BUCK6 from 950 mV; restore through `step_power()`/`step_dtzpc()` at the first
-   job. It must be re-entrant, read the display-off state, and drain the job queue before power-off.
+2. **G3D screen-off power gating (first patch):** implemented in `e3501e0b` as `g3d_sleep=1` (with `mali_gov=1`,
+   `g3d_sleep_ms=3000` by default). After no GPU job and no frame for the grace, the job worker runs `g3d_off()`,
+   returns BUCK6 from 950 mV, and restores through `step_power()`/`step_dtzpc()` plus a reset and the cores at the
+   first job. It is unvalidated: A/B it against the same run without it, and check the first frame after wake.
 3. **MFC runtime power gating (conditional):** `pd-mfc` off when there is no decode session; power-on/re-init at the
    first decode. Do it only if `mfc=0` shows a term.
 4. **A55 floor A/B:** `cpufreq_gov_lit_min=949000`, then `832000`; expect 1-2 °C and watch UFS latency. A small
@@ -686,6 +703,8 @@ How to read them:
 | battery 42-46 °C while charging, falling to normal with the cable out | charger/battery heat, not the SoC |
 | screen off, no `s6e3ha8: panel_sleep:` line, phone still warm | the panel is still scanning; add `panel_sleep=1` |
 | screen off, `panel_sleep` lines present, still warm | both `panel_sleep=1` and `sleep_cores=1` have already been tried unplugged and the board centre stayed hot; run the one-peripheral A/B series (`bt=0`, `shub=0`, `mfc=0`, `wifi_pcie=0`), then gate the G3D/display domains |
+| `mali: g3d_sleep: no job and no frame for ...: the G3D goes off` | the gate fired; the next line says the domain is off and the first job will power it on |
+| `mali: g3d_sleep: the G3D is on again after N ms` | the first job after the gate powered the domain back; N is the wake latency to compare with the run without it |
 
 `tools/analyze-max77705-log.mjs` now reads the `fps:` and `mali: GPU busy` lines too, prints a **Heat** section
 (CPU, GPU, battery, panel), names the likely source above the thresholds, and writes them to CSV/JSON:
@@ -727,6 +746,10 @@ In order, without a kernel patch:
    architecture/power work. iOS may retry its audio service, so any future run is judged by the `tmu:` zones, not
    by the case temperature.
 
+With a kernel at `e3501e0b` or later, the first G3D gate is also a boot arg, opt-in: `g3d_sleep=1` (it needs
+`mali_gov=1`, which `configs/starlte.config` already sets) with `g3d_sleep_ms=3000` by default. It is deliberately
+not in `configs/starlte.config`: run the A/B in "The idle floor" before keeping it.
+
 The one heat lever that is not a boot arg is hardware video decode: the image carries `fw/mfc_fw.bin`, and the MFC
 driver asks for it before VENDOR (step 3). With `mfc=5`, YouTube no longer decodes on the CPU: the third result has
 the firmware line, the 6/6 decoded frames, and VideoToolbox registering `avc1`/`hvc1`. The phone is still hot, so the
@@ -737,8 +760,9 @@ MFC is no longer the open question.
 
 ## What is not implemented (and what it would take)
 
-These are sketches, not switches in the tree. Each needs a log first and the owner's agreement, because each
-changes behaviour on a phone that is already hot.
+These are mostly sketches, not switches in the tree. Each needs a log first and the owner's agreement, because each
+changes behaviour on a phone that is already hot. The G3D gate is the exception: it is in the tree behind
+`g3d_sleep=1`, but it has not been on the phone.
 
 - **A "cool law" for the CPU (`gov_policy=5`).** The smallest patch with a chance of beating the default:
   keep two M3s parked even when `c->thermal != 0`; cap the four-core case at 1469 MHz and the two-core case at
@@ -754,11 +778,13 @@ changes behaviour on a phone that is already hot.
   after 3 s; the pipeline does not. This is the smaller change than a new DMA interrupt, and the audio start
   latency/click is the thing to measure. The `abox=0` A/B is negative for idle heat, so this is power and
   architecture work, not the first thermal fix.
-- **GPU idle gating and G3D OPP.** In normal use the G3D domain and BUCK6 at 950 mV stay on even at 260 MHz.
-  Gate the domain after no jobs for a grace period while the display is off (`g3d_off()` already exists), and
-  power it through the existing `step_power()`/`step_dtzpc()` sequence at the first job. This is the first domain
-  patch: smaller than full suspend and a clean A/B. Per-OPP voltage needs the G3D ASV/fvmap table; do not copy
-  S-Boot's 644 mV, which the source records as a `DATA_INVALID_FAULT` on the S9+.
+- **GPU idle gating and G3D OPP.** `g3d_sleep=1` is implemented (with `mali_gov=1`; `g3d_sleep_ms` sets the grace,
+   default 3000, 500..60000). It powers the domain off through `g3d_off()` after no GPU job and no frame for the
+   grace, and brings it back through `step_power()`/`step_dtzpc()`, a reset, the cores and address space 0 at the
+   first job. It also skips the MMU update while the domain is off, since the power-on does one full update. It is
+   the first domain patch: smaller than full suspend and a clean A/B, but it has not been run on the phone yet.
+   Per-OPP voltage still needs the G3D ASV/fvmap table; do not copy S-Boot's 644 mV, which the source records as a
+   `DATA_INVALID_FAULT` on the S9+.
 - **Native AMP E/P for the A55/M3.** The S9 profile is `BCM2837`, `MAX_CPU_CLUSTERS=1`, `__ARM_AMP__` is
   undefined and the loader writes only `small-core`; `hakios_ml.h` pairs each A55 with an M3 as a slow
   secondary. A real E/P split is a scheduler/topology change, not a boot-arg test.
@@ -790,7 +816,7 @@ changes behaviour on a phone that is already hot.
 | Scion floors | big 650000, touch 1469000, frame 1261000; lit 1053000, touch 1248000 | `EXYNOS_SCION_GOV` |
 | Parking thresholds | park under 70 °C, unpark at 78 °C | `park_under_mc`, `unpark_at_mc` |
 | GPU rates / target | 260, 455, 572 MHz; 50% busy | `g3d_rates`, `GOV_TARGET` |
-| GPU rail / domain | BUCK6 950 mV fixed; G3D domain on; no per-OPP voltage | `hakios.mali.c` |
+| GPU rail / domain | BUCK6 950 mV fixed; G3D domain on unless `g3d_sleep=1`; no per-OPP voltage | `hakios.mali.c` |
 | Pollers | touch 4 ms, Wi-Fi 2 ms, BT 1 ms, sensor 4 ms, ABOX 2 ms; about 2,500/s | driver constants above |
 | ABOX step 8 | RDMA0/UAIF1/AUD/QCH on; 2 ms status poll; 10.7 ms guard; amps stop after 3 s | `hakios.exynos_abox.c` |
 | CPU down delay | 5 x 40 ms = 200 ms | `DOWN_WINDOWS`, `window_ms` |
