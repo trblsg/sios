@@ -643,9 +643,12 @@ about 27 minutes with the screen off between the two blanks. This is the first s
 in the small root, so it is the first one that measures the rest of the floor.
 
 **`vmd=0` worked.** There is no `vmd` line and no `com.apple.voicemail.vmd` in `cputop`; the screen-off total fell
-from 146-150% to 13-14%, of which `backboardd` is 11-13%. `panel_sleep=1` is also confirmed by the
+from 146-150% to a steady 13-14%, of which `backboardd` is 11-13%. `panel_sleep=1` is also confirmed by the
 `s6e3ha8: panel_sleep: screen off: display off (28) sent, sleep-in (10) sent` lines at 468 s and 2094 s. The
-remaining software term is `backboardd`, not an app: the apps had exited.
+steady software term is `backboardd`, not an app: the apps had exited. Every few minutes a widget refresh takes
+the total to 23-42% (`ScreenTimeWidgetExtension`, `WeatherWidget`, `GeneralMapsWidget`, `runningboardd`, `dasd`),
+so the 27-minute average is above the 13-14% floor; those are system widget and daemon refreshes, not the closed
+apps.
 
 | Uptime | BIG / LITTLE | Notes |
 |---|---|---|
