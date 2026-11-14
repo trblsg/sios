@@ -768,7 +768,7 @@ and the big cluster still `?`.
 **The restart is not real.** At the wake the four CPU_ON calls each answer `0`, but no core reaches stage 2:
 
 ```
-psci: cpu 3: CPU_ON for a core taken off (sleep_cores=): AFFINITY_INFO 0 (still on) after 100829 us
+psci: cpu 3: started again; AFFINITY_INFO 0 after 100829 us
 psci: cpu 3: stage 1 after 100888 us
 GenericARMPE: sleep_cores: cpu 3 started again (0) in 5103559 us; ...
 ```
@@ -797,8 +797,9 @@ success only when `getCPUState() == kIOCPUStateRunning`, so `sleepCoresWork()` k
 `psci_smp_cpu_off()` logs a `CPU_OFF` that returns instead of taking the core. The new copies are
 `xnu/files/cpu.c`, `xnu/files/processor.c` and `xnu/files/psci_smp.c`, listed in `profiles/ios-16.5.copy`.
 
-**What the next run must show.** The same boot args and capture window: the park lines above, then at the wake
-either a real `stage 3` for each M3 or
+**What the next run must show.** The same boot args with `time_limit=3000` (so the loader returns to TWRP on its
+own), through a screen-off stay and a wake: the park lines above, then at the wake either a real `stage 3` for
+each M3 or
 
 ```
 psci: cpu 3: ... no stage 3 in 5 s (last stage 1; AFFINITY_INFO 0; CPU_ON answered 0 success): the core did not come
