@@ -16,7 +16,10 @@ still: the block's DMA never raised the IOSurface seed, so the compositor kept s
 seed raised (`4fe0b7cd`): the MFC made H.264 sessions with `error 0`, the GL layer refilled the surfaces, and there
 was no fallback. Its screen-off tail was 80/76.8 °C, but it is not a floor measurement: no `panel_sleep=1
 sleep_cores=1`, only about 50 s with the screen off, and `com.apple.voicemail.vmd` held a core. `vmd=0` leaves that
-daemon out of the next small root. The first G3D screen-off gate is in `e3501e0b` (`g3d_sleep=1`, opt-in, default
+daemon out of the next small root. The seventh ("Seventh hardware result", 13 November) confirms it: no `vmd`,
+screen-off CPU 13-14%, `backboardd` 11-13% — but the clean 27-minute floor is 72-73 °C, and `sleep_cores=1` parked
+nothing because the loader's device tree names no `cluster-type`; the fix is in `xnu/files/GenericARMPE.cpp` and
+the next run is its A/B. The first G3D screen-off gate is in `e3501e0b` (`g3d_sleep=1`, opt-in, default
 off), with runtime switches in `d836f89c`; it has not been on the phone yet, so it is the first domain patch, not a
 measured result.
 The idle ranking below is now ordered around the power domains and a real suspend: ABOX and polling are measured
@@ -49,10 +52,11 @@ The three facts that decide a heat test:
    the last 100 ms; a nearly static screen still presents about ten frames a second. The governor only caps it
    after the sensor reaches 85 °C, and the cap is applied after the floor.
 3. **With the screen off the phone is not asleep.** There is no system sleep and no `CPU_SUSPEND`; the cores idle
-   in WFI, the panel may still scan, and the A55s plus Wi-Fi/BT/sensor hub keep running. `panel_sleep=1` and
-   `sleep_cores=1` remove two of those, not all of them: tried together on battery on 10 November, the board
-   centre stayed hot. The next candidates are the G3D/display domains and the A55/uncore/memory interconnect,
-   not the panel scan or the four M3s alone.
+   in WFI, the panel may still scan, and the A55s plus Wi-Fi/BT/sensor hub keep running. `panel_sleep=1` removes
+   the scan; `sleep_cores=1` was meant to remove the M3s, but on 10 November and again on 13 November it parked
+   nothing (the loader's device tree has no `cluster-type`), so the M3s are still untested as a screen-off term.
+   The next candidates are the G3D/display domains and the A55/uncore/memory interconnect, not the panel scan
+   alone.
 
 And one negative result: **`gov_policy=3` is not the heat switch.** It can be hotter. The next sections say
 why, then how to find the actual source with a log that needs no kernel rebuild.
@@ -630,6 +634,53 @@ What to run next, one variable at a time:
 4. **If video pacing is the question,** add `fps_log=1` to the same zero-copy run. The current log has no
    `fps:` line, so it cannot say whether the player was at 30 fps; it can only say the surfaces were refreshed.
 
+### Seventh hardware result (13 November): `vmd=0`, and the real screen-off floor is 72-73 °C
+
+Kernel `gea3e2419` (`console-irq-guard`), built `Fri Nov 13 19:10:44 UTC 2026`; boot args
+`... tmu=3 fps_log=1 panel_sleep=1 sleep_cores=1 vmd=0`, `loader_return_after=3000`, no `mfc_zc`. The screen was
+blanked at about 468 s, came on for about 8 s at 2086 s, blanked again at 2094 s, and the run returned at 3013 s:
+about 27 minutes with the screen off between the two blanks. This is the first screen-off run in which `vmd` is not
+in the small root, so it is the first one that measures the rest of the floor.
+
+**`vmd=0` worked.** There is no `vmd` line and no `com.apple.voicemail.vmd` in `cputop`; the screen-off total fell
+from 146-150% to 13-14%, of which `backboardd` is 11-13%. `panel_sleep=1` is also confirmed by the
+`s6e3ha8: panel_sleep: screen off: display off (28) sent, sleep-in (10) sent` lines at 468 s and 2094 s. The
+remaining software term is `backboardd`, not an app: the apps had exited.
+
+| Uptime | BIG / LITTLE | Notes |
+|---|---|---|
+| 600 s | 73.0 / 71.7 °C | screen off, 8% / 0% asked load, `big 650 MHz`, `lit 1053 MHz` |
+| 900 s | 71.0 / 70.7 °C | `cputop` 13-14%, `backboardd` 12% |
+| 1200 s | 72.0 / 70.7 °C | no `vmd` |
+| 1800 s | 72.0 / 70.7 °C | G3D 70-71 °C, ISP 70-71 °C, battery 45 °C |
+| 2400 s | 73.0 / 71.7 °C | `max77705`: 99.51%, 4262 mV, 0 mA, 45.2 °C, on a charger, not charging |
+| 2999 s | 74.0 / 71.7 °C | still screen off; the return is at 3013 s |
+
+**This is the real floor of this configuration, and it is not 64-67 °C.** The earlier 64-67 °C runs were not 27
+minutes of a clean screen-off: some still had `vmd`, some had the panel scanning, and the 10 November run was
+unplugged. In this run the biggest remaining terms are:
+
+1. **Charger and battery.** `max77705` says the battery is at 45.2 °C, `on a charger, not charging`, 0 mA. That is
+   a PC's 5 V USB port feeding the board, not a fast charger; the charger IC and the cell are heating the centre of
+   the phone. The 45 °C battery is a confound, not an SoC zone.
+2. **`sleep_cores=1` did not park anything.** `cpufreq_gov` still says `big ... 4 online` and `big 650 MHz asked
+   load 7-9%` at 2700 s. The reason is in the device tree: the loader's `/cpus` nodes have `small-core` but no
+   `cluster-type`, so every CPU is `CLUSTER_TYPE_SMP`; the fork's `sleepCoreWanted()` took only
+   `CLUSTER_TYPE_P`, which is no CPU on this tree. The absent `GenericARMPE: sleep_cores: cpu N taken off` lines
+   do not prove otherwise: those are `IOLog`, and `disable_iolog_serial_output` keeps `IOLog` off the serial console.
+   The kernel in this run therefore left all four M3s and all four A55s online.
+3. **The A55s and the domains.** The A55s stayed at 1053 MHz (0% asked load), and G3D/ISP stayed at 70-71 °C with
+   the screen off. `sleep_cores=2` would take the A55s too once `sleep_cores=1` is fixed; `g3d_sleep=1` is the
+   next domain gate, still unvalidated.
+4. **Uncore, memory and the board itself.** With 13-14% CPU and the panel asleep, the rest is static power in the
+   SoC's domains and the board; the 64-67 °C figure cannot be recovered by CPU governor changes alone.
+
+The fix for (2) is in `trblsg/s-kernel`: `xnu/files/GenericARMPE.cpp` (copied over the fork's file by
+`profiles/ios-16.5.copy`) falls back to `small-core`/`l2_access_penalty` when the tree names no P cluster, and the
+cpufreq governor skips a core whose bit is in `hakios_cpu_exit_mask` so an off core is not counted as 100% busy.
+The next run is the A/B for that fix, still with `mfc_zc` out: `sleep_cores=1` first, then `sleep_cores=2`, and the
+same recipe once unplugged to remove the 45 °C battery term.
+
 ### The idle floor: what the A/B runs have ruled out (12 November)
 
 The 10 November case is still the one to solve: screen off, unplugged, every app closed, brightness at its
@@ -638,7 +689,7 @@ minimum, the mainboard hot in the centre. These results narrow it:
 | Test | Result | What it rules out |
 |---|---|---|
 | ABOX normal vs `abox=0`, same workload | screen-off 64/63.6 °C vs 65/64.6 °C; video within 1 °C at the same elapsed time | ABOX as the main idle source; demand-stop is architecture/power work, not the thermal fix |
-| `panel_sleep=1 sleep_cores=1`, unplugged | the board centre stayed hot | the panel scan and the four M3s as the sole cause |
+| `panel_sleep=1 sleep_cores=1`, unplugged (10 November) | the board centre stayed hot; the 13 November run shows why: `sleep_cores=1` parked nothing (the loader's tree has no `cluster-type`) | the panel scan as the sole cause; the M3s are **not** tested until the `xnu/files/GenericARMPE.cpp` fix runs |
 | touch SPI 44/INTID 76; Wi-Fi INTx SPI 253/INTID 285 | up to 806 touch IRQs a minute; 74,874 Wi-Fi INTx; no poller fallback; floor unchanged | polling as the 65 °C source (it is still an idle tax, and `s6sy761_irq=1`/`brcmfmac_poll=0` stay) |
 | software decode vs MFC | 101-102 °C and a hard reset vs 96 °C peak | MFC as an idle fix; it is a video-load fix |
 | screen off, M3 6-15% busiest, A55 1053 MHz at near-zero load | 64-67 °C | load and governor as the idle source; the remaining power is in domains, uncore and memory |
