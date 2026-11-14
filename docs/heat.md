@@ -748,6 +748,68 @@ cpufreq_gov: ... big ... (avg ..., 4 online, ... measured ...) | ...
 The `measured ?` with `0 online` is the expected line while the four M3s are off. Then the unplugged stay, then
 `sleep_cores=2` alone, then the G3D A/B (`g3d_sleep=1` against `=0`), one variable at a time and `mfc_zc` out.
 
+That list is what the ninth run produced, but its last two lines did not mean what they say: `started again (0)`
+was logged for four cores that never left stage 1, and `cpufreq_gov` did not continue past the wake. The ninth
+result below is that run; `61daf18f`'s `started again` was the start's *request*, not its outcome.
+
+### Ninth hardware result (14 November): the park lines arrive, and `started again` was false
+
+Kernel `g61daf18f` (`console-irq-guard`), built `Sat Nov 14 16:39:37 UTC 2026`; the same boot args as the eighth
+run with `loader_return_after=0` instead of `3000`, no `mfc_zc`. One log: the screen went off at 17:35:49 and on
+at 17:49:34, and the capture ran to 17:56.
+
+**The park logging works.** The new `hakios_say()` lines are in the log: `GenericARMPE: the display off (iOS's
+power request); panel_sleep=1; sleep_cores=` at the blank, then four `GenericARMPE: sleep_cores: cpu N taken off
+(0) in ~1.3 ms` lines, and on the wake `GenericARMPE: the display on ...`. The governor's park handling is
+visible too: through the whole sleep its big-cluster field reads `0 online, ... 1794 max, measured ?`, and it
+is still logging after the wake — seconds 1163 to 1166 — with the A55s measured (`lit ... measured 1790-1792`)
+and the big cluster still `?`.
+
+**The restart is not real.** At the wake the four CPU_ON calls each answer `0`, but no core reaches stage 2:
+
+```
+psci: cpu 3: CPU_ON for a core taken off (sleep_cores=): AFFINITY_INFO 0 (still on) after 100829 us
+psci: cpu 3: stage 1 after 100888 us
+GenericARMPE: sleep_cores: cpu 3 started again (0) in 5103559 us; ...
+```
+
+The same four lines appear for cpu 4, 5 and 6 (`5.19 s`, `5.10 s`, `5.10 s`). `AFFINITY_INFO 0` is "on";
+`stage 1` is only `PSCI_SMP_CPU_ASKED`, set before CPU_ON. No `stage 2` (`arm_init_cpu()`) and no `stage 3`
+means the M3 never executed an instruction. After the 5.1 s wait `psci_smp_start_cpu()` returned
+`KERN_FAILURE`, but `cpu_start()`'s `(void) PE_cpu_start(...)` threw it away and returned `KERN_SUCCESS`;
+`processor_startup()`'s arm `assert(result == KERN_SUCCESS)` is compiled out in this build, so the processor
+stayed `PROCESSOR_START` and `unpark()` reported success. The mask bit for cpu 3 was then cleared, the next
+governor tick (1167 s) bound `measure_mhz()` to the dead core, and the governor never ran again: its last line
+is `1166 s`, four seconds after the wake, and the log continues for another six minutes with no `cpufreq_gov`.
+The other three unparks repeat the same false success after it.
+
+The PMU was not the difference: at the wake `CLUSTER1 cores' STATUS` is still `100f0f`, the vendor's
+`CPU_QCH_CLUSTER1_NONCPU_SYS_PWR_REG = 8d150000` and the five `OPTION` fields `2` are still there, and
+`m3_prep=3` ran before the first CPU_ON. The M3s were already off and the firmware still acknowledged the
+second CPU_ON without bringing them up, the mainline port's "M3 hotplug still fails".
+
+**What this kernel changes.** `cpu_start()` now returns `PE_cpu_start()`'s result and `processor_startup()`
+returns the processor to `PROCESSOR_OFF_LINE` (and ends the state transition) on failure — no `PROCESSOR_START`
+that no core will leave, and no second-attempt panic in `processor_wait_for_start()`. `unpark()` reports
+success only when `getCPUState() == kIOCPUStateRunning`, so `sleepCoresWork()` keeps `gParked` and
+`hakios_cpu_exit_mask` set when the core does not come, and `measure_mhz()` has nothing dead to bind to.
+`psci_smp_start_cpu()` now logs the final stage, `AFFINITY_INFO` and the CPU_ON answer after its wait;
+`psci_smp_cpu_off()` logs a `CPU_OFF` that returns instead of taking the core. The new copies are
+`xnu/files/cpu.c`, `xnu/files/processor.c` and `xnu/files/psci_smp.c`, listed in `profiles/ios-16.5.copy`.
+
+**What the next run must show.** The same boot args and capture window: the park lines above, then at the wake
+either a real `stage 3` for each M3 or
+
+```
+psci: cpu 3: ... no stage 3 in 5 s (last stage 1; AFFINITY_INFO 0; CPU_ON answered 0 success): the core did not come
+GenericARMPE: sleep_cores: cpu 3 NOT started again (...) in ... us; ...
+```
+
+and, either way, a `cpufreq_gov` line after the wake with `measured` a number or `?` and the run not going
+silent. If the M3s cannot be started again, the choice is between leaving them parked for heat (with the
+governor measuring the A55s only) and not parking them until a restart path exists; `sleep_cores=2` and the
+G3D A/B wait until that is settled.
+
 ### The idle floor: what the A/B runs have ruled out (12 November)
 
 The 10 November case is still the one to solve: screen off, unplugged, every app closed, brightness at its
