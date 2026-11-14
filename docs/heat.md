@@ -670,8 +670,9 @@ unplugged. In this run the biggest remaining terms are:
    load 7-9%` at 2700 s. The reason is in the device tree: the loader's `/cpus` nodes have `small-core` but no
    `cluster-type`, so every CPU is `CLUSTER_TYPE_SMP`; the fork's `sleepCoreWanted()` took only
    `CLUSTER_TYPE_P`, which is no CPU on this tree. The absent `GenericARMPE: sleep_cores: cpu N taken off` lines
-   do not prove otherwise: those are `IOLog`, and `disable_iolog_serial_output` keeps `IOLog` off the serial console.
-   The kernel in this run therefore left all four M3s and all four A55s online.
+   do not prove otherwise: those were `printf`, which this kernel does not put on the serial console (the run's log
+   is the loader's log, which `loader_log_line()` reaches; the `cpufreq_gov` lines are the proof). The kernel in this
+   run therefore left all four M3s and all four A55s online.
 3. **The A55s and the domains.** The A55s stayed at 1053 MHz (0% asked load), and G3D/ISP stayed at 70-71 °C with
    the screen off. `sleep_cores=2` would take the A55s too once `sleep_cores=1` is fixed; `g3d_sleep=1` is the
    next domain gate, still unvalidated.
@@ -683,6 +684,69 @@ The fix for (2) is in `trblsg/s-kernel`: `xnu/files/GenericARMPE.cpp` (copied ov
 cpufreq governor skips a core whose bit is in `hakios_cpu_exit_mask` so an off core is not counted as 100% busy.
 The next run is the A/B for that fix, still with `mfc_zc` out: `sleep_cores=1` first, then `sleep_cores=2`, and the
 same recipe once unplugged to remove the 45 °C battery term.
+
+### Eighth hardware result (14 November): the M3s park, and the governor stops at the park
+
+Kernel `gb0207219` (`console-irq-guard`; `xnu/files/GenericARMPE.cpp` now chooses the M3s by `small-core`), built
+`Sat Nov 14 09:28:20 UTC 2026`; boot args `... tmu=3 fps_log=1 panel_sleep=1 sleep_cores=1 vmd=0`,
+`loader_return_after=3000`, no `mfc_zc`. Three logs: `base` (screen off and on), `sleep1` (a screen-off stay, then
+the screen on), and `sleep0` (no parking — no `psci: ... started again` line — 17 minutes with the screen off; its
+log starts after boot).
+
+**The park is real.** At boot the M3s come up one by one (`m3: cpu 3 ... before its CPU_ON`,
+`psci: cpu 3 (MPIDR 0x100) ... CPU_ON`); after the screen goes off the four M3s are absent from `cpufreq_gov`, and
+at the screen on they start again:
+
+```
+psci: cpu 3 (MPIDR 0x100): ... CPU_ON with entry 0x883481000 (SMC)
+psci: cpu 3: started again; AFFINITY_INFO 0 after 100869 us
+```
+
+The same pair of lines appears for cpu 4, 5 and 6 (`MPIDR 0x101..0x103`) in `base`, and again in `sleep1`.
+`sleep0` and the seventh run have no `psci: ... started again` line: nothing was parked there.
+
+**The missing park lines were `printf`.** `GenericARMPE:` appears zero times in all three logs. The file logged
+with `printf`, which this kernel does not put on the serial console; the run's log is the loader's log, which
+`loader_log_line()` reaches (every `cpufreq_gov` line is there). Fixed in `61daf18f` by logging through
+`hakios_say()` (`bsd/dev/hakios.platform.c`: the loader's log, then the console when interrupts are on).
+
+**The governor stopped exactly at the park.** In `base` the last `cpufreq_gov` line is 168 s, 11 s after the
+blank; in `sleep1` it is 104 s. It never resumes: `sleep1` has 60 s of screen-on after the `psci: ... started
+again` lines and no `cpufreq_gov` line. The cause is `measure_mhz()`: it binds the governor's own thread to the
+first core of the cluster that has ever been idle (cpu 3 on this tree), then `thread_block()`s. cpu 3 was parked,
+so the thread never ran again. The governor's `measure()` already skipped a core in `hakios_cpu_exit_mask` (the
+`d8930fa5` fix: an off core is not counted as 100% busy); `measure_mhz()` did not. Fixed in `61daf18f`: skip the
+masked cores, return 0 when the whole cluster is off, and clear a core's mask bit only after `unpark()` succeeded,
+not before.
+
+**The temperatures fell while the governor was stopped.** The `tmu` lines do not depend on the governor:
+
+| Run | Before the blank | After | Time |
+|---|---|---|---|
+| `base` | 72.0 / 69.7 °C | 64.0 / 63.6 °C | 61 s |
+| `sleep1` | 77.0 / 69.7 °C | 61.0 / 60.5 °C | 49 s |
+| `sleep0` (no parking) | 65-66 / 63.6-65.6 °C, steady | — | 17 min |
+
+The parked runs fell to 61-64 °C within a minute, at or below the 65-66 °C no-parking floor, but the comparison is
+not clean yet: the runs are short, the screen comes back on, and the battery/charger term differs (36-43 °C here,
+45.2 °C in the seventh run). The long unplugged stay is the measurement that settles it.
+
+**What the next run must show.** With `61daf18f`, the same boot args should put these lines in the log, and
+`cpufreq_gov` must continue every second through the park:
+
+```
+GenericARMPE: sleep_cores=1: the performance cores taken off 10 s after the screen goes off
+GenericARMPE: the display off (iOS's power request); panel_sleep=1; sleep_cores=
+GenericARMPE: sleep_cores: cpu 3 taken off (0) in ... us, ... processors running
+...
+cpufreq_gov: ... big ... (avg ..., 0 online, ... measured ?) | ...
+...
+GenericARMPE: sleep_cores: cpu 3 started again (0) in ... us; ... processors running
+cpufreq_gov: ... big ... (avg ..., 4 online, ... measured ...) | ...
+```
+
+The `measured ?` with `0 online` is the expected line while the four M3s are off. Then the unplugged stay, then
+`sleep_cores=2` alone, then the G3D A/B (`g3d_sleep=1` against `=0`), one variable at a time and `mfc_zc` out.
 
 ### The idle floor: what the A/B runs have ruled out (12 November)
 
