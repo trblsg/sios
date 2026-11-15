@@ -861,6 +861,52 @@ left in `boot framebuffer` mode: reboot after reconnecting the panel and check f
 `flips` in the `fps` line. An `fb_psr=0` A/B is the one-variable test for the flip timeout; the PSR line is
 `the panel left to itself after 300 ms without a frame` in this log.
 
+### The parked screen-off stay (14 November): 60-63 °C, and a park that ran with the screen on
+
+Kernel `gebec9730` (`console-irq-guard`), the same boot args as the long run (`... tmu=3 fps_log=1
+panel_sleep=1 sleep_cores=1 vmd=0`, no `mfc_zc`), one 44-minute log, 18:42:21 to 19:26:25. The screen was
+on at 18:42:25, off at 18:42:26, on at 18:42:30 and off at 18:46:31; the last 39 minutes 54 seconds are
+screen-off. This is the first screen-off stay in which the M3s are parked and the governor keeps running.
+
+**The park and the governor.** `sleep_cores: cpu 3-6 taken off (0) in 1.3 ms each`, 4 processors running;
+`cpufreq_gov` continues to 2644 s with `big ... 0 online ... measured ?` and `lit ... 4 online, 1053 MHz,
+13-14%`. `cputop` is 12-13%, `backboardd` 11%. The `ebec9730` fix holds for 40 minutes, not just for the
+few seconds after a wake.
+
+**The temperature.** The boot is the hot part: 85.0/77.8 °C at 18:42:34, with the governor already
+throttling the big cluster to 1469 MHz and the little to 1053 by 15-17 s. By the park it is 65-67 °C. The
+screen-off stay then sits at 59.5-63.0 °C (big 59.5-63.0, little 58.5-62.6, G3D 58-62, ISP 58-62,
+battery 37-42); the end is 63.0/62.6 °C. It does not climb back to the seventh run's 72-73 °C, which had
+no park (the cores were all online); the difference is the four M3s, about 10 °C, with the battery 3-8 °C
+cooler as well.
+
+**The charger.** `max77705` says `on a charger, not charging`, 0-12 mA, 23.80% flat, battery 37.4 -> 41.4 °C
+through the stay. The slow 60 -> 63 °C rise follows that battery/board term, not the SoC load (the big
+cluster is off and the little is at 13-14%). The unplugged stay is still the measurement that removes it.
+
+**The wake still fails, and the governor survives.** At 18:46:28 the panel is asked on (brightness 8), the
+four CPU_ON calls answer 0 and `AFFINITY_INFO 0`, but each stays at `stage 1`; `no stage 3 in 5 s` and
+`NOT started again (5)` follow, 5.1-5.6 s each. The screen goes off again at 18:46:31. `cpufreq_gov` is
+still logging after the four failures, with `big ... 0 online ... measured ?`; this is the behaviour
+`ebec9730` was for.
+
+**The anomaly: the park ran with the panel on.** The four `taken off` lines are at 18:42:57, 31 s after the
+18:42:26 blank, not 10 s: the boot was busy (`cputop` 384-467% at 10-15 s). The last display request before
+them is `the display on` at 18:42:30, and the sensor hub says `LCD On_Off 1` at 18:42:57; there is no
+`the display off` between 18:42:30 and 18:46:31. The governor at 20 s still reads `big ... 4 online`, and
+at 38 s it reads `0 online`. Either a display-off request is missing from the capture or the delayed park
+ran while the display was on: the 18:42:57-18:46:28 span then ran on four A55s (the backlight had faded to
+0 at 18:42:40). The park guard in `sleepCoresWork()` is `if (gDisplayOn == 0)`, and the display-on path
+does `thread_call_cancel()` then `thread_call_enter()`; the log cannot say which side lost. A controlled
+screen-on/off test must settle it before `sleep_cores` is trusted on the screen-on path. If it reproduces,
+the park loop should re-read `gDisplayOn` after each `park()` and unpark immediately when it changed, and
+the display-on path should cancel the delayed call with a generation counter, not only the call.
+
+**What the next run must show.** The same args with the cable out, 30-60 minutes screen-off: the park lines,
+`big ... 0 online ... measured ?`, `cputop` 12-14%, `dpp: VGF0 scales` (no `boot framebuffer`), and a
+temperature at or below this run's 60-63 °C. Then the screen-on/off park test, then `sleep_cores=2`, then
+the G3D A/B.
+
 ### The idle floor: what the A/B runs have ruled out (12 November)
 
 The 10 November case is still the one to solve: screen off, unplugged, every app closed, brightness at its
