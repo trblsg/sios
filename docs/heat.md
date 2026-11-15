@@ -811,6 +811,56 @@ silent. If the M3s cannot be started again, the choice is between leaving them p
 governor measuring the A55s only) and not parking them until a restart path exists; `sleep_cores=2` and the
 G3D A/B wait until that is settled.
 
+### Long run (14-15 November): the screen stayed on, and the fallback drew on the A55s
+
+Kernel `gebec9730` (`console-irq-guard`), boot args `... tmu=3 fps_log=1 panel_sleep=1 sleep_cores=1 vmd=0`,
+no `mfc_zc`; one 9.5-hour log, 285,061 lines. The loader's clock was at 18:42:21 until NTP corrected it at
+20:34:24; the real boot was 20:24:50, and the log ends at 04:14:06 (15 November). The screen was off at
+20:52:54, on at 20:53:16, off at 20:53:26 and on at 20:53:29; **there is no display-off event after that**,
+so the last 7 h 20 min are screen-on, not a screen-off floor.
+
+**The park is real and stays.** `sleep_cores=1` took cpu 3-6 off 10 s after the first blank (20:53:02,
+1.3-1.4 ms each, 7 -> 4 processors). The two wakes failed in the known way (`NOT started again (5)`, about
+5.1 s each); the governor stayed alive for the rest of the run with `big ... 0 online ... measured ?`.
+This is the tenth run's fix holding over 7.5 hours.
+
+**The display fell back to the boot framebuffer.** At 18:42:22 the scan-out was `dpp: VGF0 scales`; by
+20:34:51 the `fps` line ends `boot framebuffer`, and it stays there. The end of the log is:
+
+```
+fps: 7 presented, 7 drawn, 0 flips, 0 lost, 7 held; drawing 154011 us a frame, 154700 at most;
+... 0 refreshes; ... boot framebuffer
+```
+
+So the DECON took no flip and the compositor drew every frame into the 1440x2960 boot framebuffer at about
+6.5 fps. The GPU was 3% busy; the cost was on the A55s (`sum big 0% lit 335%`, `lit 4 online`), with
+`backboardd` 17-22% and `SpringBoard` 1-2% of the whole machine. The fallback is the designed response to a
+flip not taken in 100 ms (`FLIP_STUCK_MS`, `scanLatch()` -> `scanDrop()`); the `scan-out given up` line is
+not in this log, but the mode string is the proof. The last `s6e3ha8` line is the screen-on at 20:53:29; if
+the panel was unplugged after that, there is no TE and no flip, so the fallback cannot recover by itself.
+
+**The temperature is the screen-on fallback, not the panel.** The little cluster climbed from 62.6 °C at
+the first governor line after the last screen-on (20:54:06) to 75.8 °C by 21:48 and stayed there: 75.8 °C
+at 04:14, big 73-74.8 °C, G3D 72-73 °C, battery 37 °C.
+The governor held 1794 MHz until 01:19, 1690 MHz to 03:24, then 1456 MHz; the little ceiling is 76 °C, so the
+plateau is the thermal control, not a runaway. No trip was reached (110 °C SoC / 60 °C battery). The seventh
+run's clean screen-off floor is 72-73 °C with the battery at 45 °C; the long run is only ~3 °C above it, so the
+panel and its scan-out are not the lever. Unplugging the panel removes a small term and can add the slow
+fallback term; it does not remove the A55/uncore/PMIC heat.
+
+**The charger did not charge.** At 20:34:30 the chip said `charging`, 92.34%, -100 mA; at 20:39:06 it
+switched to `on a charger, not charging`, 91.84%, 44.1 °C, and stayed there. From then to 04:14 the pack fell
+to 10.94% at -200 to -270 mA (occasional -500/-760 mA), 35-41 °C. That is the PC's 500 mA USB port feeding
+the board, not a charger that covers the load (the seventh run's 45.2 °C battery is the same term). It is a
+drain/charging result, not the SoC heat source.
+
+**What this run changes.** It does not settle the screen-off floor: it is a screen-on stay with the display
+fallback active. The next measurement is still the unplugged, screen-off stay with `sleep_cores=1` and the
+governor fixed, no `mfc_zc`; the panel stays connected. If the screen-on case matters, the phone must not be
+left in `boot framebuffer` mode: reboot after reconnecting the panel and check for `dpp: VGF0 scales` and
+`flips` in the `fps` line. An `fb_psr=0` A/B is the one-variable test for the flip timeout; the PSR line is
+`the panel left to itself after 300 ms without a frame` in this log.
+
 ### The idle floor: what the A/B runs have ruled out (12 November)
 
 The 10 November case is still the one to solve: screen off, unplugged, every app closed, brightness at its
