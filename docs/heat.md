@@ -1209,9 +1209,31 @@ the size in 32 bits). The README inside the archive has the same steps.
 ### 4. Capture the console from the first line
 
 The full log is the USB console, not pstore: pstore is 16 KB per record (the loader's head and the kernel's tail).
-Attach the phone to the PC before the run if the PC port is the charger you want to measure (runs 3-5 did). For an
-unplugged run, let it run, then plug in and type `log`: it replays the kernel's log from its start, but the 1 MB USB
-output ring may drop bytes if the replay is larger than the ring, so the live capture from boot is the complete one.
+Attach the phone to the PC before the run if the PC port is the charger you want to measure (runs 3-5 did).
+
+An unplugged span is still captured whole, by the console's output ring (`RING_SIZE` in
+`drivers/usb/hakios.dwc3.c`): the tap keeps filling it while the cable is out and the poll sends it at the next
+attach, so plug the phone back in and let PuTTY log. What decides whether all of it arrives is the ring against the
+span's volume, and the ring drops the **newest** bytes when it is full (the end of the run, not the start):
+
+| Kernel | Ring | Span | Written | Result |
+|---|---|---|---|---|
+| to `ebec9730` | 1 MB | e603ac85: 39:54 screen off | 844 KB | `[usb: 168868 bytes of the log lost]` |
+| to `ebec9730` | 1 MB | 38c18fa9: 53 min, cable out | 2.9 MB | `[usb: 1897952 bytes of the log lost]` |
+| from `1adc69d9` | 4 MB | an hour, `console_quiet=1` | about 400 KB | none expected |
+
+`console_quiet=1` (`bsd/dev/arm/km.c`) drops what user space writes to `/dev/console`: launchd's own log, the
+daemons' standard error, os_log mirrored there. That is 566 KB of e603ac85's 844 KB and the largest line group in
+every screen-off span; the kernel's own lines (`tmu:`, `cpufreq_gov:`, `max77705:`, `fps:`, `usb:`) stay. Put it in
+`boot_args` for any run longer than 20 minutes of screen-off. The rate with it is about 7 KB a minute.
+
+Pass: no `[usb: N bytes of the log lost]` after the attach, `stat` saying `0 lost`, and the replay beginning with
+the first line the phone wrote after the cable went out. `usb unplug MS` in the console (`usb unplug 60000`) does the
+same test without a hand on the cable: the link tells the host it is unplugged for 60 s, the ring fills, and the
+attach sends it back.
+
+The ring is RAM: a restart, a panic or the `tmu=3` trip before the cable goes back in takes the whole span with it,
+and only pstore's 16 KB tail is left (section 6). That is the one case that is still not recoverable.
 
 On Windows the phone is `USB Serial Device (COMx)` (1209:0001) in Device Manager. In PuTTY:
 
@@ -1220,11 +1242,12 @@ On Windows the phone is `USB Serial Device (COMx)` (1209:0001) in Device Manager
 - `Terminal`: `Local line editing` **Force off**; `Local echo` **Force on** (the phone echoes the line again).
 - `Session` > `Logging`: `All session output`, a fresh file such as `C:\Users\ADMIN\Documents\GitHub\sios\putty-900.log`.
 
-Open the port as soon as it appears, before the kernel writes much; if you connect late, `log` replays what the
-kernel still holds (the replay may be truncated by the 1 MB ring). There is no prompt and no echo until Enter: type
-`help` and Enter; the answer is `usb> help` and the command list. If
-nothing is answered, the kernel at `8901f8c3` or later prints the host's first bytes in hex; a line without `usb> help`
-means the bytes did not end a line. Only one program may hold the port.
+Open the port as soon as it appears, before the kernel writes much; if you connect late, `log` replays only the
+first 256 KB the kernel keeps (`loader_log_tap_set()` hands the tap the head, not the ring), so it does not bring
+back an unplugged span: that one arrives by itself at the next attach (above). There is no prompt and no echo
+until Enter: type `help` and Enter; the answer is `usb> help` and the command list. If nothing is answered, the
+kernel at `8901f8c3` or later prints the host's first bytes in hex; a line without `usb> help` means the bytes did
+not end a line. Only one program may hold the port.
 
 ### 5. The 900 s timeline
 
