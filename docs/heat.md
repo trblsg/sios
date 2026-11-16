@@ -53,10 +53,10 @@ The three facts that decide a heat test:
    after the sensor reaches 85 °C, and the cap is applied after the floor.
 3. **With the screen off the phone is not asleep.** There is no system sleep and no `CPU_SUSPEND`; the cores idle
    in WFI, the panel may still scan, and the A55s plus Wi-Fi/BT/sensor hub keep running. `panel_sleep=1` removes
-   the scan; `sleep_cores=1` was meant to remove the M3s, but on 10 November and again on 13 November it parked
-   nothing (the loader's device tree has no `cluster-type`), so the M3s are still untested as a screen-off term.
-   The next candidates are the G3D/display domains and the A55/uncore/memory interconnect, not the panel scan
-   alone.
+   the scan; `sleep_cores=1` now parks the four M3s (`d8930fa5`; `cpu 3-6 taken off ... 4 processors running`)
+   and the governor survives. The parked floor is 59.5-63.0 °C with the charger still attached; the unplugged
+   floor is still unmeasured. The next candidates are the charger/PMIC, the sensor hub and the G3D/display
+   domains, not the panel scan alone.
 
 And one negative result: **`gov_policy=3` is not the heat switch.** It can be hotter. The next sections say
 why, then how to find the actual source with a log that needs no kernel rebuild.
@@ -907,6 +907,45 @@ the display-on path should cancel the delayed call with a generation counter, no
 temperature at or below this run's 60-63 °C. Then the screen-on/off park test, then `sleep_cores=2`, then
 the G3D A/B.
 
+### The 48-minute parked stay (16 November): 59.5-61.6 °C, and the capture was live
+
+Kernel `1adc69d9` (`console-irq-guard`, the 4 MB ring), boot args `tmu=3 fps_log=1 panel_sleep=1
+sleep_cores=1 vmd=0 console_quiet=1`, `time_limit=3000`; the loader returned at 3013 s. The screen was off from
+136 s to the return, 47 minutes 57 seconds. The park is at 74 s (`cpu 3-6 taken off ... 4 processors running`);
+the power key at 75 s wakes the panel and fails the unpark (four `CPU_ON`s, `AFFINITY_INFO 0`, no `stage 3`,
+`NOT started again (5)` at 5.1 s each), and the screen goes off again at 136 s. The M3s stay parked to the
+return.
+
+**The floor.** `cpufreq_gov` holds `lit 1053 MHz, 4 online, 13-16%` and `big 650 MHz, 0 online, measured ?` for
+47 minutes. The temperatures: 68.0/67.7 °C at 149 s (the 75 s wake's tail), 62.0 at 200 s, 61.0 at 300 s,
+62.0 at 400 s, then 59.5-61.6 from 600 s to 2999 s. The last line is big 61.0, lit 59.5; the last
+`tmu: 8 sensors` is big1 60.5, big2-4 61.0, big6 59.0, little5 60.5, g3d1 60.0, isp2 60.0, battery 42. That is
+the e603ac85 floor (59.5-63.0 °C) with a 1-2 °C tighter band and four more minutes, and it does not climb.
+
+**The one excursion is the host, not the idle.** At 335-382 s four A55s run at 1794 MHz at 80-100% for 48 s;
+little5 reaches 67.7, lit 68.7, big 64.6, then the governor returns to 1053 and the floor. The end PuTTY log
+starts at 08:03:42, 317 s after the 07:58:25 boot log, and `usb: the host opened the port (DTR 1 RTS 1)` is at
+350 s: the burst is the host opening the port. It is also why this is not a ring test: only 149-350 s was
+buffered (83.7 KB), and from 350 s to 3013 s the console was live. The 1.22 MB is the live stream, not a 4 MB
+replay; there is no second `host opened` at the return. Section 4 has the run that would test the ring.
+
+**The charger is still in the floor.** `max77705` says `on a charger, not charging` at every 5-minute line,
+5-7 mA (one -10), 99.77% flat, 2892 of 2967 mAh, battery 40.5 -> 42.0 °C. VBUS was present the whole time;
+`usb unplug 60000` at 149 s took it away for 60 s only. This is not the unplugged measurement: the charger/PMIC
+term is still on the board. The run that removes it is the next one.
+
+**The return.** At 3013 s `psci: cpu 3-6 did not stop: it is left running` (the parked cores reject `CPU_OFF`),
+then the 16 KB `--- kernel message buffer ---` and the loader restarts; the run still completes. The failed
+unpark costs 5.1 s per core at 100-285% `lit`, the same as ebec9730.
+
+**The next run.** The same args on battery: let the screen go off and the park lines appear, do **not** press
+power, unplug the cable at ~150 s (after the second `display off`), leave the port closed for 45 minutes, and
+open it once at ~2850 s, before `loader_return_after`; the ring then sends 150-2850 s and the run returns. At
+the measured 26 KB/min that is about 1.17 MB, under 4 MB. Add `cpufreq_gov_log=10` if the flush would be
+hurried: the per-second `cpufreq_gov: N s:` lines are 700 KB of the 1.22 MB, and a 10 s series leaves about
+550 KB. Pass: the replay begins at the second `display off`, no `[usb: N bytes of the log lost]`, `stat` says
+`0 lost`, and the floor is compared with this run's 59.5-61.6 °C.
+
 ### The first screen-off attempt (14 November): the hour was not screen-off; its 2 minutes match 61-63 °C
 
 Kernel `gebec9730` (`console-irq-guard`), the same boot args as the parked stay (`... tmu=3 fps_log=1
@@ -1213,24 +1252,35 @@ Attach the phone to the PC before the run if the PC port is the charger you want
 
 An unplugged span is still captured whole, by the console's output ring (`RING_SIZE` in
 `drivers/usb/hakios.dwc3.c`): the tap keeps filling it while the cable is out and the poll sends it at the next
-attach, so plug the phone back in and let PuTTY log. What decides whether all of it arrives is the ring against the
-span's volume, and the ring drops the **newest** bytes when it is full (the end of the run, not the start):
+attach. What decides whether all of it arrives is the ring against the span's volume, and the ring drops the
+**newest** bytes when it is full (the end of the run, not the start):
 
 | Kernel | Ring | Span | Written | Result |
 |---|---|---|---|---|
 | to `ebec9730` | 1 MB | e603ac85: 39:54 screen off | 844 KB | `[usb: 168868 bytes of the log lost]` |
 | to `ebec9730` | 1 MB | 38c18fa9: 53 min, cable out | 2.9 MB | `[usb: 1897952 bytes of the log lost]` |
-| from `1adc69d9` | 4 MB | an hour, `console_quiet=1` | about 400 KB | none expected |
+| `1adc69d9` | 4 MB | 0a1c8ed3/99cfa973: 48 min screen off, `console_quiet=1` | 83.7 KB ringed, 1.22 MB live | no loss, but the port was **reopened at 317 s**: only 149-350 s was buffered |
+
+The 0a1c8ed3 result is a heat result, not a ring result. The end PuTTY log starts at 08:03:42, 317 s after the
+07:58:25 boot log, `usb: the host opened the port` is at 350 s, and there is no second `host opened` at the
+return. From 350 s to 3013 s the console was streamed live. To test the ring, leave the port **closed** for the
+whole span and open it once, 2-3 minutes before `loader_return_after`: the ring sends 16 KB chunks at the link's
+speed, so even 1.25 MB is seconds of USB. Opening it mid-span ends the test; everything after the open is live.
 
 `console_quiet=1` (`bsd/dev/arm/km.c`) drops what user space writes to `/dev/console`: launchd's own log, the
 daemons' standard error, os_log mirrored there. That is 566 KB of e603ac85's 844 KB and the largest line group in
 every screen-off span; the kernel's own lines (`tmu:`, `cpufreq_gov:`, `max77705:`, `fps:`, `usb:`) stay. Put it in
-`boot_args` for any run longer than 20 minutes of screen-off. The rate with it is about 7 KB a minute.
+`boot_args` for any run longer than 20 minutes of screen-off. The rate with it is about 26 KB a minute, not 7:
+99cfa973's 1.22 MB over 47.5 minutes is 700 KB of `cpufreq_gov: N s:` lines (one a second), 388 KB of `shub:`
+sensor lines, 58 KB of `ufs:`, and 27 KB of `cpufreq_gov: stat`. At that rate 4 MB holds about 2.5 hours. For a
+longer span set `cpufreq_gov_log=30` (a summary line every 30 s instead of every second; `0` is none) and
+`gov_stat=0`: the governor's 727 KB becomes about 23 KB, the whole rate about 10 KB a minute, and 4 MB six hours.
+Keep `cpufreq_gov_log=1` when the 1 s temperature series is the point.
 
 Pass: no `[usb: N bytes of the log lost]` after the attach, `stat` saying `0 lost`, and the replay beginning with
 the first line the phone wrote after the cable went out. `usb unplug MS` in the console (`usb unplug 60000`) does the
 same test without a hand on the cable: the link tells the host it is unplugged for 60 s, the ring fills, and the
-attach sends it back.
+attach sends it back. That 60 s case is proven; the 48-minute one is not yet (0a1c8ed3 reopened the port at 317 s).
 
 The ring is RAM: a restart, a panic or the `tmu=3` trip before the cable goes back in takes the whole span with it,
 and only pstore's 16 KB tail is left (section 6). That is the one case that is still not recoverable.
