@@ -907,6 +907,54 @@ the display-on path should cancel the delayed call with a generation counter, no
 temperature at or below this run's 60-63 °C. Then the screen-on/off park test, then `sleep_cores=2`, then
 the G3D A/B.
 
+### The first screen-off attempt (14 November): the hour was not screen-off; its 2 minutes match 61-63 °C
+
+Kernel `gebec9730` (`console-irq-guard`), the same boot args as the parked stay (`... tmu=3 fps_log=1
+panel_sleep=1 sleep_cores=1 vmd=0`, no `mfc_zc`), 9,415 lines, 18:42:21 to 19:38:04. The USB console was
+unplugged from 18:42:41 to 19:35:36, so the capture has the boot (0-21 s) and the tail (3196-3347 s) and
+nothing in between. `loader_return_after=0` in the boot args: `time_limit=3000` was not applied, and the
+run did not return by itself.
+
+**The hour was not the parked screen-off state.** The last display request before the gap is `the display
+on` at 18:42:29; the next captured one is `the display off` at 19:35:47. At 3196-3205 s the tail shows
+`fps: 60 presented, 60 drawn, 60 flips ... dpp: VGF0 scales`, the sensor hub's `LCD On_Off 1`, four A55s at
+1794 MHz at 59-69% and 67-74.8 °C. The battery went 99.93% -> 72.27% (3271 -> 2365 mAh of the 3273 mAh
+design, 906 mAh by the gauge) in 53 minutes, about 0.9-1 A average. A parked screen-off stay draws 12-14%
+on the A55s and 0-12 mA from the pack; this was working screen-on time, not the floor. The only confirmed
+screen-off window is 19:35:47 to 19:37:54, two minutes and seven seconds.
+
+**Those two minutes match the parked stay.** `display off` at 3207 s; from 3211 to 3326 s `cputop` is
+12-14% (`backboardd` 11%), the governor is `big ... 0 online ... measured ?` and `lit 1053 MHz, 13-14%`,
+the tmu falls to 61.6-63.0 °C, and `fps: idle ... dpp: VGF0 scales`; there is no `boot framebuffer`. At
+3331 s a widget takes the total to 26%. That is the e603ac85 state, but for two minutes instead of forty.
+
+**The park lines are in the gap; the wake failures are not.** The first tail event at 3196 s is an unpark
+pass: cpu 5 `NOT started again (5)`, then cpu 6 `CPU_ON ... AFFINITY_INFO 0 ... stage 1`. The display-on at
+3334 s starts a second pass (cpu 3, 4, 5) and the log ends in the middle of it. Every `CPU_ON` answers 0,
+`AFFINITY_INFO` says 0, the core reaches `stage 1` and no `stage 3` follows; `no stage 3 in 5 s`,
+`NOT started again (5)`, `4 processors running`. `cpufreq_gov` keeps printing `big ... 0 online ...
+measured ?`. The `ebec9730` behaviour holds. The `taken off` lines are not in the capture, so this log
+cannot say when the park ran and cannot settle the e603ac85 park-while-on question.
+
+**The screen-on heat is the A55s.** With all four M3s parked, four A55s at 1794 MHz and the G3D at 572 MHz
+take the phone from 62-63 °C to 73.0/74.8 °C in about ten seconds before the 19:35:47 off (60 fps,
+`backboardd` 81% and `SpringBoard` 8% at 3336 s; `cputop` 107-225% after the 3334 s on). Parking the M3s
+does not make the screen-on path cool: the little cluster, the GPU and the display are enough on their own.
+
+**The boot is still the hottest part.** 44.3 °C at kernel init, 81 °C by 6 s, `tmu: WARNING: big at 83.0 C`
+and `little at 76.8 C`; the governor throttles big 1794 -> 1690 -> 1586 -> 1469 -> 1261 MHz and little
+1794 -> 1690 -> 1456 MHz by 17 s, then little to 1053 at 21 s. That is e603ac85's boot again (85.0/77.8 °C).
+
+**Why it is not Test 1.** `loader_return_after=0`, the screen was on for the measured hour, and the
+68-73 °C at the end is a screen-on value. The unplugged parked floor is still e603ac85's 60-63 °C.
+
+**The next run.** `time_limit=3000` and check that the boot args carry `loader_return_after=3000`. After the
+lock screen, press power and watch `GenericARMPE: the display off` and `sleep_cores: cpu 3-6 taken off ...
+4 processors running`; wait 15 s, unplug the cable, and leave the phone alone for 40-45 minutes. Read
+`/sys/fs/pstore/pmsg-ramoops-0` in TWRP: the live console cannot capture the unplugged hour. Pass: no
+`display on` before the end, `big ... 0 online ... measured ?`, `cputop` 12-14%, `backboardd` 11%, tmu at
+or below 63 °C, no `boot framebuffer`, and the battery down only a few percent, not 27.
+
 ### The idle floor: what the A/B runs have ruled out (12 November)
 
 The 10 November case is still the one to solve: screen off, unplugged, every app closed, brightness at its
