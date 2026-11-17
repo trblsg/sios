@@ -321,7 +321,8 @@ cpus=8 bootcpu=2                                        all eight cores (The cor
 m3_prep=3 pan=0 isa_floor=1                             what the M3s need (The cores)
 exynos_keys=1 max77705=1 panel=1 s6sy761=1              the keys, the battery and charger, the panel, touch
 max77705_usbsw=1 usb_gadget=5                           the USB-C port to the SoC, the log and console over USB
-cpufreq_gov=1 mali=9 mali_gov=1                         the CPU governor (and touch boost), the GPU and its clock
+cpufreq_gov=1 mali=9 mali_gov=1 mali_max=598            the CPU governor (and touch boost), the GPU and its clock (598 MHz while frames come)
+metal=2 camtl=0                                         apps on Metal (PanVK + metal2vulkan); the window server on OpenGL ES
 max77705_haptic=1 tmu=3 esslog=1                        vibration, the thermal stop, the log kept for TWRP
 poster_retry=2 backlight=2 brightness_bridge=1          SpringBoard's poster; iOS's brightness slider to the panel
 ufs=3 system_apfs=ufs_SYSTEM                            the kernel's own UFS driver; iOS's system from SYSTEM
@@ -336,9 +337,12 @@ wifi_pcie=6 brcmfmac=8 brcmfmac_poll=1 brcmfmac_tcm_idx=1 wifi=1    Wi-Fi, joine
 Arguments given to `mkimage.sh` go over them, word by word: `name=value` replaces the default of that name where it
 stands, a name with no default is added, `name=` (nothing after the =) takes a default out, and `-n` leaves all of them
 out. The kernel, the loader and user space each take the first of two words with one name, so a default is replaced,
-never just followed. Diagnostics are never defaults: `fps_log`, `systrace`, the `*_probe`, `*_log` and `*_trace`
+never just followed. The Metal pair is the hybrid: applications and app extensions get `metal=2` (the plug-in on
+PanVK and metal2vulkan, which only an image built with `METAL=vk` carries), while `camtl=0` keeps the window server
+on OpenGL ES; `camtl=1` puts backboardd on Metal again. A build without the Metal stack must say `metal=0`.
+Diagnostics are never defaults: `fps_log`, `systrace`, the `*_probe`, `*_log` and `*_trace`
 arguments are given for a run. What only the kernel reads is built into the kernel (`CONFIG_BUILTIN_ARGS`): given on the line, such an argument goes over its built-in
-value, and to turn one off give it as 0 (`name=` does that for you). The line itself holds about 140 characters of the 607, the loader adds
+value, and to turn one off give it as 0 (`name=` does that for you). The line itself holds about 170 characters of the 607, the loader adds
 about 110 and `mkimage.sh` about 45, and `mkimage.sh` warns when a line would not fit (the end of it would be cut). `-n` leaves out only what is on the line.
 A driver goes into the defaults once it has been seen working on the phone, in `configs/starlte.config`, and this list,
 `device.conf` and scion-installer's installers (which give only `system_apfs=`) follow it. The sensors (`shub=6`,
@@ -438,7 +442,9 @@ To use it:
    [docs/IPA.md](docs/IPA.md) for `ipainstaller`.
 
 The run's inputs: the kernel and packaging refs, the partition, extra boot-arguments, the time limit, `tweaks`
-(default `true`, ElleKit and PreferenceLoader), and `userdata_blocks` (default `starlte=13917184`, in 4096-byte
+(default `true`, ElleKit and PreferenceLoader), `metal` (default `true`: build PanVK and metal2vulkan, boot apps on
+Metal, keep the window server on OpenGL ES; `false` makes a GLES-only image with `metal=0`), `fps` (add `fps_log=1`;
+on for any Metal run), and `userdata_blocks` (default `starlte=13917184`, in 4096-byte
 blocks; **it formats USERDATA**, so the size must match the phone). For the heat, drain and charging test, put
 `max77705_wdt=1 max77705_diag=1 max77705_fg_s=30 tmu=3 fps_log=1` in the boot-arguments input; for screen-on
 heat add `gov_policy=2 cpufreq_gov_big_max=1469000 mali_gov_frame=455` (the defaults are four M3s to 1794 MHz
@@ -754,10 +760,13 @@ domain the boot left on is left on, with the rail at 950 mV under it. Start with
 `/redwood/bin/mali_test` (run by rc.jobs) checks the program side without Mesa, and the window server draws with
 OpenGL ES through Mesa's panfrost (`tools/mesa`, the root built with `GL=1`). Written and checked against Samsung's
 kernel (CAL, kbase, ACPM, the device tree) and the S9+ port. Seen on the phone (1 November): `mali=9` ran ("THE GPU
-WROTE IT"), and CoreAnimation draws through Mesa's Panfrost. Metal on the Mali has not been run yet.
+WROTE IT"), and CoreAnimation draws through Mesa's Panfrost. Metal runs for applications and app extensions
+(`metal=2`: Maps opens the Mali-G72 device through metal2vulkan and PanVK and draws, 17 November), while the window
+server stays on OpenGL ES (`camtl=0`); `camtl=1` puts it on Metal.
 
-How programs reach it, what Mesa's panfrost and the kernel's service were checked to agree on, why Metal goes through
-panfrost and not panvk, and the runs after `mali=9` (mali_test, the window server, gl_test, Metal): [GPU.md](GPU.md).
+How programs reach it, what Mesa's panfrost and the kernel's service were checked to agree on, the first route
+considered for Metal, and the runs after `mali=9` (mali_test, the window server, gl_test, Metal): [GPU.md](GPU.md);
+the route taken since is PanVK with metal2vulkan.
 Programs' buffers get GPU addresses between 32 MB and 4 GB, given back when freed, code kept off 16 MB lines, as Linux
 panfrost gives them and Mesa expects.
 

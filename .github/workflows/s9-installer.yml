@@ -37,9 +37,9 @@ on:
         description: "Extra boot-arguments (for example mali=9, or max77705_wdt=1 max77705_diag=1 max77705_fg_s=30 tmu=3 fps_log=1; for screen-on heat add gov_policy=2 cpufreq_gov_big_max=1469000 mali_gov_frame=455; for screen-off heat add panel_sleep=1 sleep_cores=1 (sleep_cores=1 needs console-irq-guard d8930fa5 or later: before it, the S9's cluster-type-less tree chose no core); bt=0 wifi_pcie=0 turns the radios off for a test; vmd=0 (new image) leaves the voicemail daemon out; gov_policy=3 can be hotter; see docs/heat.md)"
         default: ""
       metal:
-        description: "Metal on Vulkan for the S9's Mali-G72: build PanVK and metal2vulkan and boot apps on Metal (metal=2 camtl=0; the window server stays GLES). Use kernel_ref=s9/anan (main predates the Metal merge) and fps=true or this input to log fps: for tools/fps.py"
+        description: "Metal on Vulkan for the S9's Mali-G72, on by default: build PanVK and metal2vulkan and boot apps on Metal (metal=2 camtl=0; the window server stays GLES). Set false for a GLES-only image (metal=0). Use kernel_ref=s9/anan and fps=true or this input to log fps: for tools/fps.py"
         type: boolean
-        default: false
+        default: true
       fps:
         description: "Add fps_log=1 to the boot-arguments: the kernel writes an fps: line a second while frames come, for tools/fps.py (it is added by metal=true as well)"
         type: boolean
@@ -363,10 +363,11 @@ jobs:
           BOOT_ARGS: ${{ inputs.boot_args }}
           TIME_LIMIT: ${{ inputs.time_limit }}
           USERDATA_BLOCKS: ${{ inputs.userdata_blocks }}
-          # metal=true boots apps on Metal (metal=2) but leaves the window server on GLES (camtl=0); a
-          # metal= or camtl= in boot_args wins. fps=true, or any Metal run, adds fps_log=1: the kernel then
-          # writes the fps: lines tools/fps.py reads (tools/mk-metal2vulkan.sh is not needed to read them).
-          METAL_ARGS: ${{ inputs.metal && 'metal=2 camtl=0' || '' }}
+          # The image's own defaults (configs/starlte.config) boot apps on Metal (metal=2) and leave the window
+          # server on GLES (camtl=0); the line repeats them so the boot log says what ran. metal=false builds no
+          # Metal stack, so it says metal=0 instead; a metal= or camtl= in boot_args wins either way. fps=true, or
+          # any Metal run, adds fps_log=1: the kernel then writes the fps: lines tools/fps.py reads.
+          METAL_ARGS: ${{ inputs.metal && 'metal=2 camtl=0' || 'metal=0' }}
           FPS_ARGS: ${{ (inputs.fps || inputs.metal) && 'fps_log=1' || '' }}
         run: |
           [ -n "$USERDATA_BLOCKS" ] || { echo "::error::userdata_blocks is empty: this workflow always makes /private/var persistent on USERDATA"; exit 1; }
