@@ -4,6 +4,8 @@
 #   1. downloads iOS 16.5 (20F66) for iPhone10,3 from Apple's CDN, checked by size and hash;
 #   2. unpacks it (sysimage/unpack.sh) and builds the loader's iPhone identity (xnuloader/mkidentity.sh);
 #   3. builds the S9 kernel, the loader, Mesa, the small root (ALONE=1 RC=rc.launchd) and the system image;
+#      with metal on, also PanVK (Mesa's Vulkan driver for the Mali-G72) and metal2vulkan (the Metal runtime
+#      the plug-in opens), so the S9's apps can draw through Metal on Vulkan;
 #   4. makes the installer (Scion-Project/scion-installer universal/mkinstaller.sh): Scion's boot image to BOOT,
 #      the system image to the partition given (SYSTEM), and a formatted USERDATA: /private/var becomes
 #      persistent there (and Android's data in USERDATA is erased).
@@ -23,7 +25,7 @@ on:
   workflow_dispatch:
     inputs:
       kernel_ref:
-        description: trblsg/s-kernel branch, tag or commit
+        description: trblsg/s-kernel branch, tag or commit (s9/anan has the Anan merge, the Metal code and the camera split; main does not yet)
         default: main
       packaging_ref:
         description: Scion-Project/scion-installer branch, tag or commit
@@ -34,6 +36,14 @@ on:
       boot_args:
         description: "Extra boot-arguments (for example mali=9, or max77705_wdt=1 max77705_diag=1 max77705_fg_s=30 tmu=3 fps_log=1; for screen-on heat add gov_policy=2 cpufreq_gov_big_max=1469000 mali_gov_frame=455; for screen-off heat add panel_sleep=1 sleep_cores=1 (sleep_cores=1 needs console-irq-guard d8930fa5 or later: before it, the S9's cluster-type-less tree chose no core); bt=0 wifi_pcie=0 turns the radios off for a test; vmd=0 (new image) leaves the voicemail daemon out; gov_policy=3 can be hotter; see docs/heat.md)"
         default: ""
+      metal:
+        description: "Metal on Vulkan for the S9's Mali-G72: build PanVK and metal2vulkan and boot apps on Metal (metal=2 camtl=0; the window server stays GLES). Use kernel_ref=s9/anan (main predates the Metal merge) and fps=true or this input to log fps: for tools/fps.py"
+        type: boolean
+        default: false
+      fps:
+        description: "Add fps_log=1 to the boot-arguments: the kernel writes an fps: line a second while frames come, for tools/fps.py (it is added by metal=true as well)"
+        type: boolean
+        default: false
       time_limit:
         description: A test run's seconds, after which the phone restarts into TWRP with the log (0, no limit)
         default: "0"
@@ -81,13 +91,14 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends build-essential git curl zstd clang lld \
-            python3 python3-venv perl xz-utils flex bison m4 autoconf automake libtool-bin uuid-dev llvm \
-            meson ninja-build pkg-config hfsprogs
+            python3 python3-venv perl libdigest-sha-perl xz-utils flex bison m4 autoconf automake libtool-bin uuid-dev llvm \
+            meson ninja-build pkg-config patch hfsprogs
           curl -L --fail --retry 3 -s "$SEVENZIP_URL" | tar -xJ -C "$W/bin" 7zz
           ln -sf 7zz "$W/bin/7z"
           "$W/bin/7z" i | sed -n 2p
 
       - name: Sources (the kernel repository, this device repository inside it, scion-installer)
+        id: sources
         env:
           KERNEL_REF: ${{ inputs.kernel_ref }}
           PACKAGING_REF: ${{ inputs.packaging_ref }}
@@ -113,8 +124,14 @@ jobs:
             echo "Mesa: no patch-order fix needed (kernel_ref already has it, or its patches changed)"
           fi
           for r in "$W/k" "$W/k/devices/starlte" "$W/pkg"; do echo "$r: $(git -C "$r" log --oneline -1)"; done
-          echo "MESA_KEY=$(cd "$W/k" && cat tools/mk-mesa.sh tools/mesa/*.patch tools/mesa/hakios-drm/* | sha256sum | cut -c1-16)" >> "$GITHUB_ENV"
-          echo "DEPS_KEY=$(sha256sum "$W/k/xnu-deps/setup.sh" | cut -c1-16)" >> "$GITHUB_ENV"
+          # The cache keys. They go to GITHUB_OUTPUT, not GITHUB_ENV: a later step's `with:` reads
+          # steps.sources.outputs, and the env context is not where a run's own variables live.
+          echo "mesa=$(cd "$W/k" && cat tools/mk-mesa.sh tools/mesa/*.patch tools/mesa/hakios-drm/* | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+          echo "deps=$(sha256sum "$W/k/xnu-deps/setup.sh" | cut -c1-16)" >> "$GITHUB_OUTPUT"
+          # the same sources each Metal library is built of (tools/mk-panvk.sh's built-from, and the
+          # built-from-tree userland/build.sh compares): a cache of the output is valid only with them
+          echo "panvk=$(cd "$W/k" && cat tools/mk-panvk.sh tools/vk/vk_smoke.c tools/mesa/*.patch tools/mesa/panvk/*.patch tools/mesa/hakios-drm/* | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+          echo "m2v=$(cd "$W/k/userland" && cat ../tools/metal/mk-metal2vulkan.sh ../tools/metal/bridge/* ../tools/metal/*.metal ../tools/metal/m2v_test.c ../tools/metal/m2v/*.patch 2>/dev/null | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
 
       - name: Cache the theos toolchain and SDK
         id: theos-cache
@@ -149,13 +166,13 @@ jobs:
             /mnt/w/k/xnu-deps/tcsh
             /mnt/w/k/xnu-deps/unifdef
             /mnt/w/k/xnu-deps/MacOSX13.3.sdk
-          key: xnu-deps-src-${{ env.DEPS_KEY }}
+          key: xnu-deps-src-${{ steps.sources.outputs.deps }}
 
       - name: Cache Mesa (built for iOS; keyed on its patches, which is what userland/build.sh checks)
         uses: actions/cache@v4
         with:
           path: /mnt/w/k/xnu-deps/build/mesa/out
-          key: mesa-ios-${{ env.MESA_KEY }}
+          key: mesa-ios-${{ steps.sources.outputs.mesa }}
 
       - name: The S9's configuration, the kernel tree, the dependencies
         working-directory: /mnt/w/k
@@ -163,6 +180,62 @@ jobs:
           make starlte_defconfig
           xnu/apply.sh
           xnu-deps/setup.sh || { for f in xnu-deps/*.log; do echo "== $f"; tail -60 "$f"; done; exit 1; }
+
+      - name: Cache PanVK (Mesa's Vulkan driver for the S9's Mali-G72, built for iOS)
+        if: inputs.metal
+        uses: actions/cache@v4
+        with:
+          path: /mnt/w/k/xnu-deps/build/panvk/out
+          key: panvk-ios-${{ steps.sources.outputs.panvk }}
+
+      - name: Cache metal2vulkan (the Metal API on Vulkan, built for iOS)
+        if: inputs.metal
+        uses: actions/cache@v4
+        with:
+          path: /mnt/w/k/xnu-deps/build/metal2vulkan/out
+          key: metal2vulkan-ios-${{ steps.sources.outputs.m2v }}
+
+      - name: The S9's Metal on Vulkan (PanVK and metal2vulkan; metal=true)
+        if: inputs.metal
+        working-directory: /mnt/w/k
+        run: |
+          # The same two libraries the S9+ runs: Mesa 25.0.7's PanVK over HakiosMali (tools/mk-panvk.sh),
+          # and metal2vulkan's Metal runtime (tools/metal/mk-metal2vulkan.sh ios). Both are off for an
+          # ordinary GLES image; userland/build.sh installs them only when METAL=vk and the directories
+          # are named. Their caches are keyed on the sources above, so a repeat run starts from the output.
+          P=xnu-deps/build/panvk/out
+          V=xnu-deps/build/metal2vulkan/out/ios
+          if [ ! -f "$P/libvulkan_panfrost.dylib" ] || [ ! -x "$P/vk_smoke" ]; then
+            echo "PanVK: Mesa 25.0.7's Vulkan driver for the Mali-G72 (tools/mk-panvk.sh)"
+            tools/mk-panvk.sh > "$W/panvk.log" 2>&1 || {
+              echo "::error::PanVK did not build"
+              grep -a -n -B3 -A15 -E "(: error:|error:|FAILED|ninja: build stopped)" "$W/panvk.log" | tail -120 || true
+              echo "== the last 80 lines of $W/panvk.log"
+              tail -80 "$W/panvk.log"
+              exit 1
+            }
+            tail -3 "$W/panvk.log"
+          else
+            echo "PanVK: the cache's $P/libvulkan_panfrost.dylib"
+          fi
+          want=$(cd userland && cat ../tools/metal/mk-metal2vulkan.sh ../tools/metal/bridge/* ../tools/metal/*.metal \
+            ../tools/metal/m2v_test.c ../tools/metal/m2v/*.patch 2>/dev/null | sha256sum)
+          if [ ! -f "$V/libmetal2vulkan.dylib" ] || [ "$(cat "$V/built-from-tree" 2>/dev/null)" != "$want" ]; then
+            echo "metal2vulkan: the Metal API on Vulkan (tools/metal/mk-metal2vulkan.sh ios; Rust, some minutes)"
+            tools/metal/mk-metal2vulkan.sh ios > "$W/metal2vulkan.log" 2>&1 || {
+              echo "::error::metal2vulkan did not build"
+              grep -a -n -B3 -A15 -E "(: error:|error\[|error:|panicked|FAILED)" "$W/metal2vulkan.log" | tail -120 || true
+              echo "== the last 80 lines of $W/metal2vulkan.log"
+              tail -80 "$W/metal2vulkan.log"
+              exit 1
+            }
+            tail -3 "$W/metal2vulkan.log"
+          else
+            echo "metal2vulkan: the cache's $V/libmetal2vulkan.dylib"
+          fi
+          test -f "$P/libvulkan_panfrost.dylib" && test -x "$P/vk_smoke"
+          test -f "$V/libmetal2vulkan.dylib"
+          ls -la "$P/libvulkan_panfrost.dylib" "$P/vk_smoke" "$V/libmetal2vulkan.dylib"
 
       - name: iOS 16.5 (20F66) for iPhone10,3, from Apple
         run: |
@@ -223,6 +296,13 @@ jobs:
           # vmd=0 removes com.apple.voicemail.vmd from the small root (mkjobs.py). It is read here,
           # when the image is built, not at run time; the same token is also passed on as a boot arg.
           VMD: ${{ contains(inputs.boot_args, 'vmd=0') && '0' || '' }}
+          # metal=true: build.sh's METAL=vk puts HakiosMetalVK and the two libraries in the small root; the
+          # boot line's metal=2 (added below) is what shows apps the device. The window server stays GLES
+          # (camtl=0): on iOS 16.5 it has no Metal compositor, and build 65's was slower (docs/metal.md).
+          METAL: ${{ inputs.metal && 'vk' || '' }}
+          M2V_DIR: ${{ inputs.metal && '/mnt/w/k/xnu-deps/build/metal2vulkan/out/ios' || '' }}
+          PANVK_DIR: ${{ inputs.metal && '/mnt/w/k/xnu-deps/build/panvk/out' || '' }}
+          METAL_ICD: ${{ inputs.metal && '/redwood/lib/libvulkan_panfrost.dylib' || '' }}
         run: |
           # Sileo and the Procursus bootstrap, pinned by tools/mk-jb.sh. Unlike scion-installer's
           # build-installer.sh (PREINSTALL= ELLEKIT=), this image carries tweak injection: ElleKit
@@ -283,8 +363,18 @@ jobs:
           BOOT_ARGS: ${{ inputs.boot_args }}
           TIME_LIMIT: ${{ inputs.time_limit }}
           USERDATA_BLOCKS: ${{ inputs.userdata_blocks }}
+          # metal=true boots apps on Metal (metal=2) but leaves the window server on GLES (camtl=0); a
+          # metal= or camtl= in boot_args wins. fps=true, or any Metal run, adds fps_log=1: the kernel then
+          # writes the fps: lines tools/fps.py reads (tools/mk-metal2vulkan.sh is not needed to read them).
+          METAL_ARGS: ${{ inputs.metal && 'metal=2 camtl=0' || '' }}
+          FPS_ARGS: ${{ (inputs.fps || inputs.metal) && 'fps_log=1' || '' }}
         run: |
           [ -n "$USERDATA_BLOCKS" ] || { echo "::error::userdata_blocks is empty: this workflow always makes /private/var persistent on USERDATA"; exit 1; }
+          ARGS="$BOOT_ARGS"
+          for arg in $FPS_ARGS $METAL_ARGS; do
+            name=${arg%%=*}
+            case " $ARGS " in *" $name="*) ;; *) ARGS="$arg $ARGS" ;; esac
+          done
           UARGS=()
           for pair in $USERDATA_BLOCKS; do
             case "$pair" in
@@ -298,7 +388,7 @@ jobs:
           SCION_KERNEL="$W/k" "$W/pkg/universal/mkinstaller.sh" -K "$W/k" -s "$W/k/userland/system.apfs" \
             -k starlte="$W/kernels/kernel-starlte" -k star2lte="$W/kernels/kernel-star2lte" -k crownlte="$W/kernels/kernel-crownlte" \
             -r "$W/k/userland/root.apfs" -p "$PARTITION" -t "$TIME_LIMIT" -U "${UARGS[@]}" \
-            -a "starlte=shub=6 bt=7 $BOOT_ARGS" -o "$W/out/scion-exynos9810-installer-format-userdata.zip"
+            -a "starlte=shub=6 bt=7 $ARGS" -o "$W/out/scion-exynos9810-installer-format-userdata.zip"
 
       - name: Encrypt it (the installer inside, untouched), and check the archive
         env:
@@ -364,6 +454,9 @@ jobs:
           path: |
             /mnt/w/kernel.log
             /mnt/w/userland.log
+            /mnt/w/panvk.log
+            /mnt/w/metal2vulkan.log
             /mnt/w/k/xnu-deps/*.log
+            /mnt/w/k/xnu-deps/build/panvk/*.log
           retention-days: 7
           if-no-files-found: ignore
