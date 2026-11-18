@@ -1,6 +1,9 @@
 # The S9's modem under HakiOS: research and plan
 
-Status: **research only, nothing written or run.** November 2026. No phone was used to write this.
+Status: **a driver is written and enabled; nothing has run on the phone under 16.5 yet.** November 2026.
+The plan below is kept as it was written (a research plan, before any code); `drivers/modem/hakios.shannon.c`
+now carries upstream's seven-stage driver, and `configs/starlte.config` turns it on (`CONFIG_HAKIOS_SHANNON=y`,
+`cp=7`, `cp_nv=2`, `cp_delay=40`, `cp_rfs=1`, `cp_if=1`). See "Where the work stands" at the end.
 
 The Galaxy S9 (SM-G960F) has a Samsung Shannon CP inside the Exynos 9810 itself (Samsung's driver calls it
 `ss360ap`; FirmWire's model of the same chip family is `S360AP`). It shares DRAM with the AP and talks to it
@@ -692,3 +695,25 @@ Unchanged in order, sharper in detail:
    bootloader if S-Boot preloaded anything). This is read-only, needs no SMC, and tells us whether Carbon and
    the cold-boot state let us see the CP at all. After that comes `IOCTL_SECURITY_REQ` mode 2 (SMC 0x82000700)
    through Carbon, the first call that can fail at EL3.
+
+---
+
+## Where the work stands
+
+The research plan above became code in upstream's kernel tree (Scion-Project/scion-kernel) and is now carried on
+this port's 16.5 line:
+
+- `drivers/modem/hakios.shannon.c` is upstream's driver: the seven stages (`cp=N`; the plan's `shannon=N` name
+  was not kept), the CP's image copied from RADIO read-only and checked through EL3's own call, the NV data read
+  from EFS through `drivers/modem/hakios.ext4ro.h` (read-only, `cp_nv=2`), RFS file opens answered from RAM
+  (`cp_rfs=1`), the FMT link, registration, and an optional data context `pdp_ip0` (`cp_if=1`, needs `cp_apn=`).
+- The driver refuses to run where the CP's memory is XNU's. This port's UEFI and loader were already changed for
+  that (section 1.5): the payload is moved out at once and `0xF0000000-0xFD9FFFFF` (the CP's `modem_if`,
+  `cp_ram_logging` and ABOX's region) is kept from UEFI's allocator and from XNU.
+- `configs/starlte.config` turns it on by the owner's decision: `CONFIG_HAKIOS_SHANNON=y`, `cp=7`, `cp_nv=2`,
+  `cp_delay=40`, `cp_rfs=1`, `cp_if=1`. **It has not been seen running under 16.5 yet**, and no `cp_apn=` is
+  given, so the CP registers on the network but opens no data context. `cp=0` for a run leaves it alone.
+- `userland/build.sh` builds and installs `scion-celld` (from `tools/ios27/modem/scion-celld.c`), which makes
+  `pdp_ip0` a configd network service when the data context exists and ends at once on a boot without the modem.
+- The safety rules of this plan stand: nothing writes EFS, SEC_EFS, CPEFS or `nv_data.bin`, and the modem image
+  is never redistributed.
