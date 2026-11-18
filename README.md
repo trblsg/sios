@@ -328,11 +328,12 @@ max77705_haptic=1 tmu=3 esslog=1                        vibration, the thermal s
 poster_retry=2 backlight=2 brightness_bridge=1          SpringBoard's poster; iOS's brightness slider to the panel
 ufs=3 system_apfs=ufs_SYSTEM                            the kernel's own UFS driver; iOS's system from SYSTEM
 ufs_write=1 var_hfs=ufs_USERDATA_data                   /private/var kept in USERDATA (a memory filesystem if it holds no HFS Plus)
-fb_dpp=1 fb_zc=1 rtc_pmic=1                             scaling by the DPP, zero-copy scan-out, the RTC's time
+fb_dpp=1 fb_zc=1                                        scaling by the DPP, zero-copy scan-out
 fb_psr=300 gov_policy=2 gov_wake=1                      panel self-refresh, governor without parking, GPU wake on touch
 cam_s9=7 cam=5                                          the front camera on demand (Camera app; cam_s9_always=1 keeps it on)
 abox=8 max98512=3 cs47l93=6                             the speakers; the codec and its main microphone
 wifi_pcie=6 brcmfmac=8 brcmfmac_poll=1 brcmfmac_tcm_idx=1 wifi=1    Wi-Fi, joined from iOS's Settings
+cp=7 cp_nv=2 cp_rfs=1 cp_if=1 cp_delay=40              the Shannon CP, started 40 s in; its NV read from EFS (read only), no data context without cp_apn
 ```
 
 Arguments given to `mkimage.sh` go over them, word by word: `name=value` replaces the default of that name where it
@@ -348,7 +349,8 @@ about 110 and `mkimage.sh` about 45, and `mkimage.sh` warns when a line would no
 A driver goes into the defaults once it has been seen working on the phone, in `configs/starlte.config`, and this list,
 `device.conf` and scion-installer's installers (which give only `system_apfs=`) follow it. The sensors (`shub=6`,
 SENSORS.md), Bluetooth (`bt=7`, BLUETOOTH.md) and the microphone in iOS (`abox_mic=1`, AUDIO.md) have been seen
-working and are defaults.
+working and are defaults. The modem (`cp=7`) is the one exception: it is on by the owner's decision of 17 November,
+before it has been seen under iOS 16.5 ([docs/modem-plan.md](docs/modem-plan.md), "Where the work stands").
 
 ## On the phone
 
