@@ -52,7 +52,7 @@ on:
         type: boolean
         default: true
       userdata_blocks:
-        description: "USERDATA size in 4096-byte blocks, as DEVICE=BLOCKS (S9 64 GB: starlte=13917184); this FORMATS USERDATA and erases Android's data"
+        description: "Devices to build and format, as DEVICE=BLOCKS of 4096 bytes (test S9: starlte=13917184); only listed models are packaged. WARNING: formats USERDATA and erases Android data"
         default: "starlte=13917184"
 
 concurrency:
@@ -102,6 +102,7 @@ jobs:
         env:
           KERNEL_REF: ${{ inputs.kernel_ref }}
           PACKAGING_REF: ${{ inputs.packaging_ref }}
+          USERDATA_BLOCKS: ${{ inputs.userdata_blocks }}
         run: |
           # the fork carries the IRQ work (irq-fallback); upstream is Scion-Project/scion-kernel
           git clone -q --filter=blob:none https://github.com/trblsg/s-kernel.git "$W/k"
@@ -111,8 +112,16 @@ jobs:
           # this run's own commit of the device repository, where tools/hakios-device.py sync would put it
           git clone -q --filter=blob:none "https://github.com/$GITHUB_REPOSITORY.git" "$W/k/devices/starlte"
           git -C "$W/k/devices/starlte" checkout -q "$GITHUB_SHA"
-          # the S9+ and the Note9, at the revisions the kernel repository pins
-          (cd "$W/k" && python3 tools/hakios-device.py sync star2lte crownlte 2>&1 | tail -3 || true)
+          # Only sync optional devices being packaged; S9 itself is checked out above.
+          [ -n "$USERDATA_BLOCKS" ] || { echo "::error::userdata_blocks is empty"; exit 1; }
+          for pair in $USERDATA_BLOCKS; do
+            dev=${pair%%=*}
+            case "$dev" in
+              starlte) ;;
+              star2lte|crownlte) (cd "$W/k" && python3 tools/hakios-device.py sync "$dev") ;;
+              *) echo "::error::Unsupported device in userdata_blocks: $dev"; exit 1 ;;
+            esac
+          done
           # The kernel's Mesa patches are applied in name order by tools/mk-mesa.sh: panfrost-darwin.patch
           # (29 October) changes the meson.build line that turnip-darwin.patch, last by name, still expects,
           # so the build stops at "1 out of 1 hunk FAILED -- saving rejects to file meson.build.rej". This
@@ -260,13 +269,16 @@ jobs:
           rm -f "$W/ios.ipsw"
           df -h /mnt
 
-      - name: The S9 kernel
+      - name: Kernels for the requested devices (S9 by default)
         working-directory: /mnt/w/k
+        env:
+          USERDATA_BLOCKS: ${{ inputs.userdata_blocks }}
         run: |
           # Wi-Fi is an object of its own, compiled against the kernel's tree: without it the kernel links and says nothing
           tools/mk-brcmfmac.sh > "$W/brcmfmac.log" 2>&1 || { tail -80 "$W/brcmfmac.log"; exit 1; }
           mkdir -p "$W/kernels"
-          for d in starlte star2lte crownlte; do
+          for pair in $USERDATA_BLOCKS; do
+            d=${pair%%=*}
             make ${d}_defconfig > /dev/null
             rm -f hakios-kernel
             make kernel JOBS="$(nproc)" > "$W/kernel-$d.log" 2>&1 || {
@@ -281,6 +293,7 @@ jobs:
             cp hakios-kernel "$W/kernels/kernel-$d"
             grep -a 'drivers built in' "$W/kernel-$d.log" | tail -1 || true
           done
+          [ -f "$W/kernels/kernel-starlte" ] || { echo "::error::userdata_blocks must include starlte=BLOCKS for this S9 workflow"; exit 1; }
           grep -aq 'lx: brcmfmac 2:' "$W/kernels/kernel-starlte" || { echo "::error::the S9's kernel has no Wi-Fi driver in it"; exit 1; }
           # the S9's configuration last, for mkimage.sh's defaults
           make starlte_defconfig > /dev/null
@@ -357,7 +370,7 @@ jobs:
           tail -5 "$W/userland.log"
           ls -la userland/root.apfs userland/system.apfs
 
-      - name: The installer, S9, S9+ and Note9 (scion-installer universal/mkinstaller.sh), USERDATA formatted
+      - name: S9 installer (only requested device kernels), USERDATA formatted
         env:
           PARTITION: ${{ inputs.partition }}
           BOOT_ARGS: ${{ inputs.boot_args }}
@@ -377,17 +390,21 @@ jobs:
             case " $ARGS " in *" $name="*) ;; *) ARGS="$arg $ARGS" ;; esac
           done
           UARGS=()
+          KARGS=()
           for pair in $USERDATA_BLOCKS; do
             case "$pair" in
               starlte=*|star2lte=*|crownlte=*) ;;
               *) echo "::error::userdata_blocks: $pair is not DEVICE=BLOCKS (starlte, star2lte, crownlte)"; exit 1 ;;
             esac
             case "${pair#*=}" in *[!0-9]*|'') echo "::error::userdata_blocks: ${pair#*=} is not a number of 4096-byte blocks"; exit 1 ;; esac
+            d=${pair%%=*}
+            [ -f "$W/kernels/kernel-$d" ] || { echo "::error::missing kernel for $d"; exit 1; }
             UARGS+=(-u "$pair")
+            KARGS+=(-k "$d=$W/kernels/kernel-$d")
           done
           mkdir -p "$W/out"
           SCION_KERNEL="$W/k" "$W/pkg/universal/mkinstaller.sh" -K "$W/k" -s "$W/k/userland/system.apfs" \
-            -k starlte="$W/kernels/kernel-starlte" -k star2lte="$W/kernels/kernel-star2lte" -k crownlte="$W/kernels/kernel-crownlte" \
+            "${KARGS[@]}" \
             -r "$W/k/userland/root.apfs" -p "$PARTITION" -t "$TIME_LIMIT" -U "${UARGS[@]}" \
             -a "starlte=shub=6 bt=7 $ARGS" -o "$W/out/scion-exynos9810-installer-format-userdata.zip"
 
