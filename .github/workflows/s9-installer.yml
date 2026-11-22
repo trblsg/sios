@@ -122,12 +122,32 @@ jobs:
         id: sources
         env:
           KERNEL_REF: ${{ inputs.kernel_ref }}
+          BOOT_ARGS: ${{ inputs.boot_args }}
           PACKAGING_REF: ${{ inputs.packaging_ref }}
           USERDATA_BLOCKS: ${{ inputs.userdata_blocks }}
         run: |
           # the fork carries the IRQ work (irq-fallback); upstream is Scion-Project/scion-kernel
           git clone -q --filter=blob:none https://github.com/trblsg/s-kernel.git "$W/k"
           git -C "$W/k" checkout -q "$KERNEL_REF"
+          # One-boot deep Home experiment MUST carry the matched kernel
+          # mailbox, full SpringBoard hooks and autonomous A/B in the same
+          # kernel_ref. Stop before the expensive Mesa/iOS build otherwise.
+          case " $BOOT_ARGS " in
+            *" hi=2 "*)
+              echo "S9 hi=2 preflight: kernel_ref=$KERNEL_REF commit=$(git -C "$W/k" rev-parse --short HEAD)"
+              for src in userland/src/s9_home_idle.inc userland/src/s9_home_idle_auto.inc \
+                         userland/src/s9_home_idle_detail.inc userland/src/s9_hi_auto_policy.h; do
+                [ -s "$W/k/$src" ] || { echo "::error::hi=2 requires kernel source $src (BOOT and SYSTEM must match)"; exit 1; }
+              done
+              grep -Fq 'hi_auto_arg = strstr(arguments, "hi=2")' "$W/k/userland/src/inject_sb.c" ||
+                { echo "::error::kernel_ref lacks hi=2 boot activation in SpringBoard"; exit 1; }
+              grep -Fq 'hi_cmd, CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_ANYBODY | CTLFLAG_KERN' "$W/k/drivers/gpu/mali/hakios.mali.c" ||
+                { echo "::error::kernel_ref lacks the USB kernel CTLFLAG_KERN fix (hi_cmd would return EPERM)"; exit 1; }
+              grep -Fq 'hi_auto_tick();' "$W/k/userland/src/s9_home_idle.inc" ||
+                { echo "::error::hi=2 autonomous source-cut control was not integrated"; exit 1; }
+              echo "S9 hi=2 preflight: PASS; BOOT+SYSTEM matched at source"
+              ;;
+          esac
           git clone -q --filter=blob:none https://github.com/Scion-Project/scion-installer.git "$W/pkg"
           git -C "$W/pkg" checkout -q "$PACKAGING_REF"
           # this run's own commit of the device repository, where tools/hakios-device.py sync would put it
