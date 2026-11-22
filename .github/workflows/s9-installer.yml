@@ -81,6 +81,27 @@ jobs:
         run: |
           [ -n "$PASS" ] || { echo "::error::set the repository secret INSTALLER_PASSPHRASE: the installer is never uploaded unencrypted"; exit 1; }
 
+      - name: Refuse truncated S9 boot-args BEFORE building
+        env:
+          BOOT_ARGS: ${{ inputs.boot_args }}
+          METAL_ARGS: ${{ inputs.metal && 'metal=2 camtl=0' || 'metal=0' }}
+          FPS_ARGS: ${{ (inputs.fps || inputs.metal) && 'fps_log=1' || '' }}
+        run: |
+          ARGS="$BOOT_ARGS"
+          for arg in $FPS_ARGS $METAL_ARGS; do
+            name=${arg%%=*}
+            case " $ARGS " in *" $name="*) ;; *) ARGS="$arg $ARGS" ;; esac
+          done
+          EXTRA="shub=6 bt=7 $ARGS"
+          N=$(printf '%s' "$EXTRA" | LC_ALL=C wc -c | tr -d '[:space:]')
+          # On the tested 20F66 S9 kernel the loader prepends ~300 bytes;
+          # 607 is the payload limit. Leave 27 extra bytes of headroom.
+          echo "S9 cmdline budget: -a extras $N / 280 bytes; overall cap 607"
+          if [ "$N" -gt 280 ]; then
+            echo "::error::boot_args too long: -a payload $N bytes exceeds S9 safe limit 280. Last boot silently dropped max77705_fg_s. Shorten before building."
+            exit 1
+          fi
+
       - name: Work space on /mnt
         run: |
           sudo mkdir -p "$W/bin" && sudo chown -R "$(id -u):$(id -g)" "$W"
@@ -389,6 +410,20 @@ jobs:
             name=${arg%%=*}
             case " $ARGS " in *" $name="*) ;; *) ARGS="$arg $ARGS" ;; esac
           done
+          # The Exynos loader passes only 607 useful cmdline bytes. A measured S9 boot
+          # spent 300 bytes before the -a extras and previously silently cut an
+          # argument at byte 607 (max77705_fg_). Reserve another 27 bytes for
+          # changing loader/kernel defaults; FAIL instead of building a bad image.
+          # This counts the exact per-device -a payload, after the metal/fps
+          # automatic arguments have been inserted.
+          S9_EXTRA="shub=6 bt=7 $ARGS"
+          S9_EXTRA_BYTES=$(printf '%s' "$S9_EXTRA" | LC_ALL=C wc -c | tr -d '[:space:]')
+          S9_MAX_EXTRA=280
+          echo "S9 bootargs: extra=$S9_EXTRA_BYTES/$S9_MAX_EXTRA bytes; loader effective cmdline cap=607"
+          if [ "$S9_EXTRA_BYTES" -gt "$S9_MAX_EXTRA" ]; then
+            echo "::error::S9 boot arguments would risk silent truncation: $S9_EXTRA_BYTES extra bytes > $S9_MAX_EXTRA safe bytes. Shorten boot_args; optional P6 diagnostics are runtime sysctls."
+            exit 1
+          fi
           UARGS=()
           KARGS=()
           for pair in $USERDATA_BLOCKS; do
@@ -406,7 +441,7 @@ jobs:
           SCION_KERNEL="$W/k" "$W/pkg/universal/mkinstaller.sh" -K "$W/k" -s "$W/k/userland/system.apfs" \
             "${KARGS[@]}" \
             -r "$W/k/userland/root.apfs" -p "$PARTITION" -t "$TIME_LIMIT" -U "${UARGS[@]}" \
-            -a "starlte=shub=6 bt=7 $ARGS" -o "$W/out/scion-exynos9810-installer-format-userdata.zip"
+            -a "starlte=$S9_EXTRA" -o "$W/out/scion-exynos9810-installer-format-userdata.zip"
 
       - name: Encrypt it (the installer inside, untouched), and check the archive
         env:
