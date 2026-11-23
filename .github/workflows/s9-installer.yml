@@ -193,10 +193,56 @@ jobs:
                 { echo "::error::P7 CPU_OFF opt-in control missing"; exit 1; }
               grep -Fq 'hakios_p7_cpu_park(unsigned enable)' "$W/k/xnu/files/GenericARMPE.cpp" ||
                 { echo "::error::P7 matching GenericARMPE CPU power control missing"; exit 1; }
-              case " $BOOT_ARGS " in
-                *" sleep_cores=1 "*) ;;
-                *) echo "::error::P7 single build requires sleep_cores=1 for later runtime CPU_OFF tests (default runtime gate remains OFF)"; exit 1;;
+              # P7 legacy build tested screen-off CPU_OFF; P8 must NEVER do so.
+              # P8 has two independent EPERM guards and therefore does not
+              # require sleep_cores=1 (avoid even allocating the old worker).
+              if [ -s "$W/k/docs/s9-p8-unified-power-m3-lab.md" ]; then
+                echo 'P8: no sleep_cores boot argument required; CPU_OFF interlocked'
+              else
+                case " $BOOT_ARGS " in
+                  *" sleep_cores=1 "*) ;;
+                  *) echo "::error::P7 single build requires sleep_cores=1 for later runtime CPU_OFF tests (default runtime gate remains OFF)"; exit 1;;
+                esac
+              fi
+              # A P8 image MUST ship both layers of the M3 CPU_OFF lock,
+              # retained kernel PMU/PSCI/thermal telemetry, long GPU ring,
+              # and the paired Windows host+report. Check when P8 sources
+              # are present so pinned commit SHA refs work as well.
+              case "$KERNEL_REF" in
+                s9/p8-*) [ -s "$W/k/docs/s9-p8-unified-power-m3-lab.md" ] || {
+                  echo "::error::P8 kernel_ref missing P8 source/doc: refuse mismatched BOOT+SYSTEM"; exit 1; } ;;
               esac
+              if [ -s "$W/k/docs/s9-p8-unified-power-m3-lab.md" ]; then
+                echo "S9 P8 preflight: enforcing 2026-11-23 CPU3 re-entry safety on $(git -C "$W/k" rev-parse --short HEAD)"
+                for src in drivers/power/exynos/hakios.p8_unified_lab.h \
+                           drivers/soc/exynos/hakios.p8_soc_snapshot.h \
+                           tools/s9-p8-unified-serial.inc.ps1 tools/s9-p8-report.ps1 \
+                           tools/tests/test-s9-p8-unified.ps1 \
+                           tools/tests/s9-p8-reentry-negative-fixture.log \
+                           docs/s9-p8-unified-power-m3-lab.md; do
+                  [ -s "$W/k/$src" ] || { echo "::error::P8 missing matched source $src"; exit 1; }
+                done
+                grep -Fq 'p8-safety: BIG CPU_OFF REFUSED' "$W/k/xnu/files/GenericARMPE.cpp" &&
+                grep -Fq 'if(value==1)return EPERM;' "$W/k/drivers/power/exynos/hakios.p7_cpu_lab.h" ||
+                  { echo "::error::P8 kernel must block legacy M3 CPU_OFF at TWO layers"; exit 1; }
+                grep -Fq '#define P8_RING 512u' "$W/k/drivers/power/exynos/hakios.p8_unified_lab.h" &&
+                grep -Fq '#define P7_GPU_RING 512u' "$W/k/drivers/gpu/mali/hakios.p7_gpu_lab.h" &&
+                grep -Fq 'hakios_p8_psci_snapshot' "$W/k/xnu/files/psci_smp.c" &&
+                grep -Fq 'hakios_p8_m3_snapshot' "$W/k/drivers/soc/exynos/hakios.exynos_m3.c" &&
+                grep -Fq 'p8_probe(now);' "$W/k/drivers/power/exynos/hakios.exynos_cpufreq.c" &&
+                grep -Fq 'max = MIN(max,p8_cap)' "$W/k/drivers/power/exynos/hakios.exynos_cpufreq.c" ||
+                  { echo "::error::P8 PMU/PSCI ring and lower-only thermal cap absent"; exit 1; }
+                grep -Fq 'power/exynos bsd/dev/hakios.p8_unified_lab.h' "$W/k/drivers/map" &&
+                grep -Fq 'soc/exynos bsd/dev/hakios.p8_soc_snapshot.h' "$W/k/drivers/map" &&
+                grep -Fq 's9-p8-unified-serial.inc.ps1' "$W/k/tools/s9-home-idle-serial-auto.ps1" &&
+                grep -Fq 'P8 HARDWARE SAFETY' "$W/k/tools/s9-home-idle-serial-auto.ps1" &&
+                grep -Fq 'P8 CPU RE-ENTRY / POWER FAULT' "$W/k/tools/s9-p8-report.ps1" ||
+                  { echo "::error::P8 BOOT+SYSTEM/USB/parser pairing incomplete"; exit 1; }
+                if grep -Fq 'p7_cpu_park=1' "$W/k/tools/s9-p8-unified-serial.inc.ps1"; then
+                  echo "::error::P8 passive automation must never request destructive M3 CPU_OFF"; exit 1
+                fi
+                echo 'S9 P8 preflight: PASS; CPU_OFF refused, PMU+PSCI+thermal+GPU rings and reports paired'
+              fi
               echo "S9 hi=2 preflight: PASS; BOOT+SYSTEM+Windows automation matched at source"
               ;;
           esac

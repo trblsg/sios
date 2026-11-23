@@ -1,7 +1,7 @@
 name: S9 Home Idle Installer Preflight (No Image Build)
 on:
   push:
-    branches: [fix/s9-homeidle-bootarg-guard, fix/s9-p7-clock-basepower-installer]
+    branches: [fix/s9-homeidle-bootarg-guard, fix/s9-p7-clock-basepower-installer, fix/s9-p8-unified-installer]
   workflow_dispatch:
 permissions:
   contents: read
@@ -51,3 +51,20 @@ jobs:
             exit 1
           fi
           echo 'S9 hi2: matching sources PASS, missing/wrong sources FAIL as intended'
+      - name: Validate paired P8 kernel and reject a missing safety interlock
+        run: |
+          git clone --depth=1 --branch s9/p8-unified-power-m3-lab --filter=blob:none \
+            https://github.com/trblsg/s-kernel.git /tmp/hi2-p8/k
+          export W=/tmp/hi2-p8
+          export KERNEL_REF=s9/p8-unified-power-m3-lab
+          export BOOT_ARGS="hi=2 mali_gov=1 mali_gov_frame=450 mali_probe=1 p3power=1 poster_probe=1 max77705_fg_s=10 max77705_diag=1 max77705_diag_s=30 glstage=1 glcost=1 p0hash=1 p0verify=1"
+          bash /tmp/hi2-preflight.sh | tee /tmp/hi2-p8-result.txt
+          grep -Fq 'S9 P8 preflight: PASS; CPU_OFF refused' /tmp/hi2-p8-result.txt
+          mkdir -p /tmp/hi2-p8-bad
+          cp -a /tmp/hi2-p8/k /tmp/hi2-p8-bad/k
+          rm /tmp/hi2-p8-bad/k/drivers/power/exynos/hakios.p8_unified_lab.h
+          if W=/tmp/hi2-p8-bad bash /tmp/hi2-preflight.sh; then
+            echo "::error::P8 installer accepted missing safe P8 header"
+            exit 1
+          fi
+          echo 'P8 matching kernel and host preflight PASS, missing safety header rejected'
