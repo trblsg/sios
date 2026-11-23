@@ -137,8 +137,12 @@ jobs:
               echo "S9 hi=2 preflight: kernel_ref=$KERNEL_REF commit=$(git -C "$W/k" rev-parse --short HEAD)"
               for src in userland/src/s9_home_idle.inc userland/src/s9_home_idle_auto.inc \
                          userland/src/s9_home_idle_detail.inc userland/src/s9_home_idle_scene.inc \
-                         userland/src/s9_hi_auto_policy.h tools/s9-home-idle-serial-auto.ps1 \
-                         tools/s9-home-idle-report.ps1; do
+                         userland/src/s9_hi_auto_policy.h userland/src/s9_hi_verified_policy.h \
+                         userland/src/s9_hi_clock_resolve.inc \
+                         drivers/gpu/mali/hakios.p7_gpu_lab.h \
+                         drivers/power/exynos/hakios.p7_cpu_lab.h \
+                         tools/s9-home-idle-serial-auto.ps1 tools/s9-home-idle-report.ps1 \
+                         tools/s9-p7-basepower-report.ps1 docs/s9-p7-clock-basepower-unified.md; do
                 [ -s "$W/k/$src" ] || { echo "::error::hi=2 requires kernel source $src (BOOT and SYSTEM must match)"; exit 1; }
               done
               grep -Fq 'hi_auto_arg = strstr(arguments, "hi=2")' "$W/k/userland/src/inject_sb.c" ||
@@ -155,6 +159,24 @@ jobs:
                 { echo "::error::hi=2 USB serial script requires 301 Settings fallback route"; exit 1; }
               grep -Fq 'SBSOpenSensitiveURLAndUnlock' "$W/k/userland/src/s9_home_idle_scene.inc" ||
                 { echo "::error::hi=2 Settings foreground launch helper missing"; exit 1; }
+              # P7 pairing: reject a build that would ship Clock A/B but NOT
+              # the opt-in verified-owner Clock policy and PMU/CPU diagnostics.
+              grep -Fq 'hi_verified_should_skip(' "$W/k/userland/src/s9_home_idle.inc" ||
+                { echo "::error::P7 Clock owner-verified source path missing"; exit 1; }
+              grep -Fq 'hi_policy,' "$W/k/drivers/gpu/mali/hakios.mali.c" ||
+                { echo "::error::P7 hi_policy sysctl missing"; exit 1; }
+              grep -Fq 'p7_gpu_gate_watchdog(now);' "$W/k/drivers/gpu/mali/hakios.mali_lab.h" ||
+                { echo "::error::P7 G3D autonomous expiry missing"; exit 1; }
+              grep -Fq 'p7_cpu_probe(now);' "$W/k/drivers/power/exynos/hakios.exynos_cpufreq.c" ||
+                { echo "::error::P7 CPU governor ring not integrated"; exit 1; }
+              grep -Fq 'p7_cpu_park' "$W/k/drivers/power/exynos/hakios.p7_cpu_lab.h" ||
+                { echo "::error::P7 CPU_OFF opt-in control missing"; exit 1; }
+              grep -Fq 'hakios_p7_cpu_park(unsigned enable)' "$W/k/xnu/files/GenericARMPE.cpp" ||
+                { echo "::error::P7 matching GenericARMPE CPU power control missing"; exit 1; }
+              case " $BOOT_ARGS " in
+                *" sleep_cores=1 "*) ;;
+                *) echo "::error::P7 single build requires sleep_cores=1 for later runtime CPU_OFF tests (default runtime gate remains OFF)"; exit 1;;
+              esac
               echo "S9 hi=2 preflight: PASS; BOOT+SYSTEM+Windows automation matched at source"
               ;;
           esac

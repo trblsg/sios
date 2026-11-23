@@ -1,7 +1,7 @@
 name: S9 Home Idle Installer Preflight (No Image Build)
 on:
   push:
-    branches: [fix/s9-homeidle-bootarg-guard]
+    branches: [fix/s9-homeidle-bootarg-guard, fix/s9-p7-clock-basepower-installer]
   workflow_dispatch:
 permissions:
   contents: read
@@ -18,7 +18,7 @@ jobs:
           from textwrap import dedent
           w=Path('.github/workflows/s9-installer.yml').read_text()
           start=w.index('          case " $BOOT_ARGS " in')
-          end=w.index('          esac', start)+len('          esac')
+          end=w.index('          git clone -q --filter=blob:none https://github.com/Scion-Project/scion-installer.git', start)
           script='set -e\n'+dedent(w[start:end])+'\n'
           Path('/tmp/hi2-preflight.sh').write_text(script)
           assert 'hi_cmd, CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_ANYBODY | CTLFLAG_KERN' in script
@@ -26,23 +26,23 @@ jobs:
           step=w.split('      - name: Sources (the kernel repository',1)[1]
           step=step.split('        run: |',1)[1].split('      - name:',1)[0]
           Path('/tmp/hi2-sources.sh').write_text(dedent(step))
-          boot='hi=2 mali_gov=1 mali_gov_frame=450 mali_probe=1 p3power=1 poster_probe=1 max77705_fg_s=10 max77705_diag=1 max77705_diag_s=30 glstage=1 glcost=1 p0hash=1 p0verify=1'
+          boot='hi=2 sleep_cores=1 mali_gov=1 mali_gov_frame=450 mali_probe=1 p3power=1 poster_probe=1 max77705_fg_s=10 max77705_diag=1 max77705_diag_s=30 glstage=1 glcost=1 p0hash=1 p0verify=1'
           extra='shub=6 bt=7 fps_log=1 metal=2 camtl=0 '+boot
-          assert len(boot.encode())==163
-          assert len(extra.encode())==201
+          assert len(boot.encode())==177
+          assert len(extra.encode())==215
           assert len(extra.encode())<=280
-          print('S9 hi2: input 163 bytes; -a extra 201 bytes <= conservative 280-byte cap')
+          print('S9 P7: input 177 bytes; -a extra 215 bytes <= conservative 280-byte cap')
           PY
           bash -n /tmp/hi2-preflight.sh
           bash -n /tmp/hi2-sources.sh
       - name: Run real paired kernel-ref preflight and reject broken ref
         run: |
           mkdir -p /tmp/hi2-good /tmp/hi2-bad
-          git clone --depth=1 --branch s9/home-idle-oneboot-ab --filter=blob:none \
+          git clone --depth=1 --branch s9/p7-clock-basepower-oneboot --filter=blob:none \
             https://github.com/trblsg/s-kernel.git /tmp/hi2-good/k
           export W=/tmp/hi2-good
-          export KERNEL_REF=s9/home-idle-oneboot-ab
-          export BOOT_ARGS="hi=2 mali_gov=1 mali_gov_frame=450 mali_probe=1 p3power=1 poster_probe=1 max77705_fg_s=10 max77705_diag=1 max77705_diag_s=30 glstage=1 glcost=1 p0hash=1 p0verify=1"
+          export KERNEL_REF=s9/p7-clock-basepower-oneboot
+          export BOOT_ARGS="hi=2 sleep_cores=1 mali_gov=1 mali_gov_frame=450 mali_probe=1 p3power=1 poster_probe=1 max77705_fg_s=10 max77705_diag=1 max77705_diag_s=30 glstage=1 glcost=1 p0hash=1 p0verify=1"
           bash /tmp/hi2-preflight.sh | tee /tmp/hi2-result.txt
           grep -Fq 'S9 hi=2 preflight: PASS; BOOT+SYSTEM+Windows automation matched at source' /tmp/hi2-result.txt
           # Wrong/missing kernel tree must FAIL before expensive compilation.
