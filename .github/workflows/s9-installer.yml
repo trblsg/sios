@@ -175,6 +175,12 @@ jobs:
                 { echo "::error::P7 hi_policy sysctl missing"; exit 1; }
               grep -Fq 'p7_gpu_gate_watchdog(now);' "$W/k/drivers/gpu/mali/hakios.mali_lab.h" ||
                 { echo "::error::P7 G3D autonomous expiry missing"; exit 1; }
+              grep -Fq 'gpu/mali bsd/dev/hakios.p7_gpu_lab.h' "$W/k/drivers/map" &&
+              grep -Fq 'power/exynos bsd/dev/hakios.p7_cpu_lab.h' "$W/k/drivers/map" ||
+                { echo "::error::P7 driver headers are not mapped into XNU (compile would fail)"; exit 1; }
+              grep -Fq 'char s[512]' "$W/k/drivers/usb/hakios.dwc3.c" &&
+              grep -Fq 'char line[768]' "$W/k/drivers/usb/hakios.dwc3.c" ||
+                { echo "::error::USB sysctl 256/300-byte legacy buffers would truncate P7 stats"; exit 1; }
               grep -Fq 'p7_cpu_probe(now);' "$W/k/drivers/power/exynos/hakios.exynos_cpufreq.c" ||
                 { echo "::error::P7 CPU governor ring not integrated"; exit 1; }
               grep -Fq 'p7_cpu_park' "$W/k/drivers/power/exynos/hakios.p7_cpu_lab.h" ||
