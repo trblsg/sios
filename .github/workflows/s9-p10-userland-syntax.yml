@@ -1,0 +1,37 @@
+name: S9 P10 iOS16.5 SpringBoard/backboardd source compile
+on:
+  push:
+    branches: [fix/s9-p10-lockscreen-installer]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  p10-userland:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch pinned P10 kernel/userland source from s-kernel
+        run: |
+          git clone --depth=1 --branch s9/p10-lockscreen-source-guard --filter=blob:none \
+            https://github.com/trblsg/s-kernel.git /tmp/p10-source
+          git -C /tmp/p10-source rev-parse HEAD
+          test -s /tmp/p10-source/userland/src/s9_p10_lock_scene.inc
+          test -s /tmp/p10-source/userland/src/s9_p10_lock_policy.h
+      - name: Obtain the public iPhoneOS16.5 SDK for compile-only checks
+        run: |
+          git init -q /tmp/p10-sdks
+          git -C /tmp/p10-sdks remote add origin https://github.com/theos/sdks.git
+          git -C /tmp/p10-sdks sparse-checkout set iPhoneOS16.5.sdk
+          git -C /tmp/p10-sdks fetch -q --depth 1 --filter=blob:none origin HEAD
+          git -C /tmp/p10-sdks checkout -q FETCH_HEAD
+          test -d /tmp/p10-sdks/iPhoneOS16.5.sdk/usr/include
+      - name: Compile both P10 userland inject sources, without linking/installing
+        run: |
+          SDK=/tmp/p10-sdks/iPhoneOS16.5.sdk
+          clang --version | head -1
+          clang -target arm64-apple-ios16.5 -isysroot "$SDK" -fblocks -O1 \
+            -fsyntax-only /tmp/p10-source/userland/src/inject_sb.c
+          clang -target arm64-apple-ios16.5 -isysroot "$SDK" -fblocks -O1 \
+            -fsyntax-only /tmp/p10-source/userland/src/inject.c
+          echo 'P10 USERLAND SYNTAX PASS: SpringBoard+backboardd arm64 iOS 16.5'
