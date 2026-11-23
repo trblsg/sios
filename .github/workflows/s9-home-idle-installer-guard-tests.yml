@@ -22,7 +22,7 @@ jobs:
           script='set -e\n'+dedent(w[start:end])+'\n'
           Path('/tmp/hi2-preflight.sh').write_text(script)
           assert 'hi_cmd, CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_ANYBODY | CTLFLAG_KERN' in script
-          assert 'hi_auto_tick();' in script and 'BOOT+SYSTEM matched' in script
+          assert 'hi_auto_tick();' in script and 'BOOT+SYSTEM+Windows automation matched' in script
           step=w.split('      - name: Sources (the kernel repository',1)[1]
           step=step.split('        run: |',1)[1].split('      - name:',1)[0]
           Path('/tmp/hi2-sources.sh').write_text(dedent(step))
@@ -44,7 +44,7 @@ jobs:
           export KERNEL_REF=s9/home-idle-oneboot-ab
           export BOOT_ARGS="hi=2 mali_gov=1 mali_gov_frame=450 mali_probe=1 p3power=1 poster_probe=1 max77705_fg_s=10 max77705_diag=1 max77705_diag_s=30 glstage=1 glcost=1 p0hash=1 p0verify=1"
           bash /tmp/hi2-preflight.sh | tee /tmp/hi2-result.txt
-          grep -Fq 'S9 hi=2 preflight: PASS; BOOT+SYSTEM matched at source' /tmp/hi2-result.txt
+          grep -Fq 'S9 hi=2 preflight: PASS; BOOT+SYSTEM+Windows automation matched at source' /tmp/hi2-result.txt
           # Wrong/missing kernel tree must FAIL before expensive compilation.
           if W=/tmp/hi2-bad bash /tmp/hi2-preflight.sh; then
             echo "::error::hi=2 installer preflight accepted a missing kernel tree"

@@ -136,7 +136,9 @@ jobs:
             *" hi=2 "*)
               echo "S9 hi=2 preflight: kernel_ref=$KERNEL_REF commit=$(git -C "$W/k" rev-parse --short HEAD)"
               for src in userland/src/s9_home_idle.inc userland/src/s9_home_idle_auto.inc \
-                         userland/src/s9_home_idle_detail.inc userland/src/s9_hi_auto_policy.h; do
+                         userland/src/s9_home_idle_detail.inc userland/src/s9_home_idle_scene.inc \
+                         userland/src/s9_hi_auto_policy.h tools/s9-home-idle-serial-auto.ps1 \
+                         tools/s9-home-idle-report.ps1; do
                 [ -s "$W/k/$src" ] || { echo "::error::hi=2 requires kernel source $src (BOOT and SYSTEM must match)"; exit 1; }
               done
               grep -Fq 'hi_auto_arg = strstr(arguments, "hi=2")' "$W/k/userland/src/inject_sb.c" ||
@@ -145,7 +147,15 @@ jobs:
                 { echo "::error::kernel_ref lacks the USB kernel CTLFLAG_KERN fix (hi_cmd would return EPERM)"; exit 1; }
               grep -Fq 'hi_auto_tick();' "$W/k/userland/src/s9_home_idle.inc" ||
                 { echo "::error::hi=2 autonomous source-cut control was not integrated"; exit 1; }
-              echo "S9 hi=2 preflight: PASS; BOOT+SYSTEM matched at source"
+              grep -Fq 'if(command==252){hi_auto_rearm();return;}' "$W/k/userland/src/s9_home_idle.inc" ||
+                { echo "::error::hi=2 USB serial script requires verified 252 rearm (late COM attachment)"; exit 1; }
+              grep -Fq 'if(command==300){hi_open_settings(false);return;}' "$W/k/userland/src/s9_home_idle.inc" ||
+                { echo "::error::hi=2 USB serial script requires 300 Settings URL route"; exit 1; }
+              grep -Fq 'if(command==301){hi_open_settings(true);return;}' "$W/k/userland/src/s9_home_idle.inc" ||
+                { echo "::error::hi=2 USB serial script requires 301 Settings fallback route"; exit 1; }
+              grep -Fq 'SBSOpenSensitiveURLAndUnlock' "$W/k/userland/src/s9_home_idle_scene.inc" ||
+                { echo "::error::hi=2 Settings foreground launch helper missing"; exit 1; }
+              echo "S9 hi=2 preflight: PASS; BOOT+SYSTEM+Windows automation matched at source"
               ;;
           esac
           git clone -q --filter=blob:none https://github.com/Scion-Project/scion-installer.git "$W/pkg"
