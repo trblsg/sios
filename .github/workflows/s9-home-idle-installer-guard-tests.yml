@@ -1,7 +1,7 @@
 name: S9 Home Idle Installer Preflight (No Image Build)
 on:
   push:
-    branches: [fix/s9-homeidle-bootarg-guard, fix/s9-p7-clock-basepower-installer, fix/s9-p8-unified-installer]
+    branches: [fix/s9-homeidle-bootarg-guard, fix/s9-p7-clock-basepower-installer, fix/s9-p8-unified-installer, fix/s9-p9-screenoff-installer]
   workflow_dispatch:
 permissions:
   contents: read
@@ -68,3 +68,22 @@ jobs:
             exit 1
           fi
           echo 'P8 matching kernel and host preflight PASS, missing safety header rejected'
+      - name: Verify paired P9 source fixes and reject missing panel boot arg / safety source
+        run: |
+          git clone --depth=1 --branch s9/p9-screenoff-power-render --filter=blob:none \
+            https://github.com/trblsg/s-kernel.git /tmp/hi2-p9/k
+          export W=/tmp/hi2-p9
+          export KERNEL_REF=s9/p9-screenoff-power-render
+          export BOOT_ARGS="hi=2 panel=1 mali_gov=1 mali_gov_frame=450 mali_probe=1 p3power=1 poster_probe=1 max77705_fg_s=10 max77705_diag=1 max77705_diag_s=30 glstage=1 glcost=1 p0hash=1 p0verify=1"
+          bash /tmp/hi2-preflight.sh | tee /tmp/hi2-p9-result.txt
+          grep -Fq 'S9 P9 preflight PASS: GPU physical OFF/ON' /tmp/hi2-p9-result.txt
+          if BOOT_ARGS="hi=2 mali_gov=1" bash /tmp/hi2-preflight.sh; then
+            echo "::error::P9 accepted build with missing panel=1"; exit 1
+          fi
+          mkdir -p /tmp/hi2-p9-bad
+          cp -a /tmp/hi2-p9/k /tmp/hi2-p9-bad/k
+          rm /tmp/hi2-p9-bad/k/drivers/gpu/mali/hakios.mali_lab.h
+          if W=/tmp/hi2-p9-bad bash /tmp/hi2-preflight.sh; then
+            echo "::error::P9 accepted build with missing GPU safe gate source"; exit 1
+          fi
+          echo 'P9 matched source and P7 EPERM preflight PASS; bad panel args / missing driver source rejected'

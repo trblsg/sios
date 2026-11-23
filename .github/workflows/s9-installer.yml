@@ -245,6 +245,54 @@ jobs:
                 fi
                 echo 'S9 P8 preflight: PASS; CPU_OFF refused, PMU+PSCI+thermal+GPU rings and reports paired'
               fi
+              # P9: one image with ACTUAL screen-OFF GPU power gate,
+              # Samsung DCS sleep/wake, adaptive touch+USB and the
+              # narrowly allowlisted SpringBoard Clock source correction.
+              # A SHA-pinned kernel_ref is accepted only if its tree passes.
+              case "$KERNEL_REF" in
+                s9/p9-*) [ -s "$W/k/docs/s9-p9-screen-off-power-fix.md" ] || {
+                  echo "::error::P9 kernel_ref lacks P9 source/doc; refusing mismatched BOOT+SYSTEM"; exit 1; } ;;
+              esac
+              if [ -s "$W/k/docs/s9-p9-screen-off-power-fix.md" ]; then
+                echo "S9 P9 paired source preflight: $(git -C "$W/k" rev-parse --short HEAD)"
+                for src in drivers/gpu/mali/hakios.mali_lab.h \
+                           drivers/display/panel/hakios.s6e3ha8.c \
+                           drivers/input/touch/hakios.s6sy761.c \
+                           drivers/usb/hakios.dwc3.c \
+                           drivers/power/exynos/hakios.exynos_cpufreq.c \
+                           userland/src/s9_p9_clock_policy.h \
+                           tools/s9-p9-power-fix.inc.ps1 \
+                           tools/tests/test-s9-p9-power-fix.ps1 \
+                           docs/s9-p9-screen-off-power-fix.md; do
+                  [ -s "$W/k/$src" ] || { echo "::error::P9 missing $src in matched kernel"; exit 1; }
+                done
+                case " $BOOT_ARGS " in
+                  *" panel=1 "*) ;;
+                  *) echo "::error::P9 panel DCS needs panel=1 in boot_args before building"; exit 1 ;;
+                esac
+                case " $BOOT_ARGS " in
+                  *" mali_gov=1 "*) ;;
+                  *) echo "::error::P9 G3D auto gate requires mali_gov=1"; exit 1 ;;
+                esac
+                case " $BOOT_ARGS " in
+                  *" sleep_cores=1 "*|*" panel_sleep=1 "*)
+                    echo "::error::P9 forbids P7 CPU_OFF and boot-time panel sleep; use safe runtime P9 switches"; exit 1 ;;
+                esac
+                grep -Fq 'p9_auto_gpu_sysctl' "$W/k/drivers/gpu/mali/hakios.mali_lab.h" &&
+                grep -Fq 'gate_mode == 2 && hakios_display_requested_on() != 0' "$W/k/drivers/gpu/mali/hakios.mali.c" &&
+                grep -Fq '!g3d_awake && !g3d_power_on()' "$W/k/drivers/gpu/mali/hakios.mali_lab.h" &&
+                grep -Fq 'gPanelSleep || hakios_p9_panel_auto_on()' "$W/k/xnu/files/GenericARMPE.cpp" &&
+                grep -Fq 'p9_panel_mode_sysctl' "$W/k/drivers/display/panel/hakios.s6e3ha8.c" &&
+                grep -Fq 'p9_touch_off_ms_sysctl' "$W/k/drivers/input/touch/hakios.s6sy761.c" &&
+                grep -Fq 'p9_usb_off_ms_sysctl' "$W/k/drivers/usb/hakios.dwc3.c" &&
+                grep -Fq 'p9_wake_guard_sysctl' "$W/k/drivers/power/exynos/hakios.exynos_cpufreq.c" &&
+                grep -Fq 's9_p9_hidden_clock_skip' "$W/k/userland/src/s9_home_idle.inc" &&
+                grep -Fq 'P9 REAL HARDWARE PASS' "$W/k/tools/s9-p9-power-fix.inc.ps1" &&
+                grep -Fq 'P9Fix' "$W/k/tools/s9-home-idle-serial-auto.ps1" &&
+                grep -Fq 'p8-safety: BIG CPU_OFF REFUSED' "$W/k/xnu/files/GenericARMPE.cpp" ||
+                  { echo "::error::P9 hardware source fix/rollback or CPU_OFF interlock missing"; exit 1; }
+                echo 'S9 P9 preflight PASS: GPU physical OFF/ON, panel DCS, touch/USB, Clock, wake cap and P7 CPU_OFF lock'
+              fi
               echo "S9 hi=2 preflight: PASS; BOOT+SYSTEM+Windows automation matched at source"
               ;;
           esac
