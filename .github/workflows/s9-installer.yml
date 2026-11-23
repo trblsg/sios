@@ -141,8 +141,9 @@ jobs:
                          userland/src/s9_hi_clock_resolve.inc \
                          drivers/gpu/mali/hakios.p7_gpu_lab.h \
                          drivers/power/exynos/hakios.p7_cpu_lab.h \
-                         tools/s9-home-idle-serial-auto.ps1 tools/s9-home-idle-report.ps1 \
-                         tools/s9-p7-basepower-report.ps1 docs/s9-p7-clock-basepower-unified.md; do
+                         tools/s9-home-idle-serial-auto.ps1 tools/s9-p7-power-ab.inc.ps1 \
+                         tools/s9-home-idle-report.ps1 tools/s9-p7-basepower-report.ps1 \
+                         docs/s9-p7-clock-basepower-unified.md docs/s9-p7-power-ab-run.md; do
                 [ -s "$W/k/$src" ] || { echo "::error::hi=2 requires kernel source $src (BOOT and SYSTEM must match)"; exit 1; }
               done
               grep -Fq 'hi_auto_arg = strstr(arguments, "hi=2")' "$W/k/userland/src/inject_sb.c" ||
@@ -169,6 +170,11 @@ jobs:
                 { echo "::error::P7 USB host script does not verify actual sysctl readback"; exit 1; }
               grep -Fq 'Confirm-G3DRestored' "$W/k/tools/s9-home-idle-serial-auto.ps1" ||
                 { echo "::error::P7 G3D ON/PLL/TZ restore verification missing"; exit 1; }
+              grep -Fq 's9-p7-power-ab.inc.ps1' "$W/k/tools/s9-home-idle-serial-auto.ps1" &&
+              grep -Fq 'P7-Run-G3DAB' "$W/k/tools/s9-p7-power-ab.inc.ps1" &&
+              grep -Fq 'P7-Run-CPUAB' "$W/k/tools/s9-p7-power-ab.inc.ps1" &&
+              grep -Fq 'P7-VerifyCpuRestored' "$W/k/tools/s9-p7-power-ab.inc.ps1" ||
+                { echo "::error::P7 dedicated one-command G3D/CPU A/B/A host scripts missing"; exit 1; }
               grep -Fq 'LeaveP7AuditRunning' "$W/k/tools/s9-home-idle-serial-auto.ps1" ||
                 { echo "::error::P7 battery-only ring capture not supported in Windows script"; exit 1; }
               grep -Fq 'hi_policy,' "$W/k/drivers/gpu/mali/hakios.mali.c" ||
