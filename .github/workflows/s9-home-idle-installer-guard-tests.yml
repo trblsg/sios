@@ -17,7 +17,7 @@ jobs:
           from pathlib import Path
           from textwrap import dedent
           w=Path('.github/workflows/s9-installer.yml').read_text()
-          start=w.index('          case " $BOOT_ARGS " in')
+          start=w.index('          # P10 MUST run with hi=2')
           end=w.index('          git clone -q --filter=blob:none https://github.com/Scion-Project/scion-installer.git', start)
           script='set -e\n'+dedent(w[start:end])+'\n'
           Path('/tmp/hi2-preflight.sh').write_text(script)

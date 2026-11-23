@@ -129,6 +129,15 @@ jobs:
           # the fork carries the IRQ work (irq-fallback); upstream is Scion-Project/scion-kernel
           git clone -q --filter=blob:none https://github.com/trblsg/s-kernel.git "$W/k"
           git -C "$W/k" checkout -q "$KERNEL_REF"
+          # P10 MUST run with hi=2, even for a SHA-pinned kernel_ref.
+          # The hi=2 source-verification block below would otherwise be
+          # skipped ENTIRELY by passing hi=0, silently building P10 with no
+          # SpringBoard lockscreen hook. Fail before any expensive build.
+          if [ -s "$W/k/docs/s9-p10-lockscreen-source-guard.md" ] &&
+             [[ " $BOOT_ARGS " != *" hi=2 "* ]]; then
+            echo "::error::P10 source requires hi=2 (refuse bypassed lockscreen hook)"
+            exit 1
+          fi
           # One-boot deep Home experiment MUST carry the matched kernel
           # mailbox, full SpringBoard hooks and autonomous A/B in the same
           # kernel_ref. Stop before the expensive Mesa/iOS build otherwise.
