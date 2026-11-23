@@ -163,6 +163,14 @@ jobs:
               # the opt-in verified-owner Clock policy and PMU/CPU diagnostics.
               grep -Fq 'hi_verified_should_skip(' "$W/k/userland/src/s9_home_idle.inc" ||
                 { echo "::error::P7 Clock owner-verified source path missing"; exit 1; }
+              grep -Fq "method_getReturnType(getter,return_type,sizeof(return_type))" "$W/k/userland/src/s9_hi_clock_resolve.inc" ||
+                { echo "::error::P7 Clock getter ABI guard missing (SpringBoard crash risk)"; exit 1; }
+              grep -Fq 'Test-SysctlReadback' "$W/k/tools/s9-home-idle-serial-auto.ps1" ||
+                { echo "::error::P7 USB host script does not verify actual sysctl readback"; exit 1; }
+              grep -Fq 'Confirm-G3DRestored' "$W/k/tools/s9-home-idle-serial-auto.ps1" ||
+                { echo "::error::P7 G3D ON/PLL/TZ restore verification missing"; exit 1; }
+              grep -Fq 'LeaveP7AuditRunning' "$W/k/tools/s9-home-idle-serial-auto.ps1" ||
+                { echo "::error::P7 battery-only ring capture not supported in Windows script"; exit 1; }
               grep -Fq 'hi_policy,' "$W/k/drivers/gpu/mali/hakios.mali.c" ||
                 { echo "::error::P7 hi_policy sysctl missing"; exit 1; }
               grep -Fq 'p7_gpu_gate_watchdog(now);' "$W/k/drivers/gpu/mali/hakios.mali_lab.h" ||
