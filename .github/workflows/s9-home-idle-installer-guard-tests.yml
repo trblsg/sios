@@ -1,7 +1,7 @@
 name: S9 Home Idle Installer Preflight (No Image Build)
 on:
   push:
-    branches: [fix/s9-homeidle-bootarg-guard, fix/s9-p7-clock-basepower-installer, fix/s9-p8-unified-installer, fix/s9-p9-screenoff-installer]
+    branches: [fix/s9-homeidle-bootarg-guard, fix/s9-p7-clock-basepower-installer, fix/s9-p8-unified-installer, fix/s9-p9-screenoff-installer, fix/s9-p10-lockscreen-installer]
   workflow_dispatch:
 permissions:
   contents: read
@@ -87,3 +87,22 @@ jobs:
             echo "::error::P9 accepted build with missing GPU safe gate source"; exit 1
           fi
           echo 'P9 matched source and P7 EPERM preflight PASS; bad panel args / missing driver source rejected'
+      - name: Verify one matched P10 Lock Screen kernel/userland and reject absent lock proof
+        run: |
+          git clone --depth=1 --branch s9/p10-lockscreen-source-guard --filter=blob:none \
+            https://github.com/trblsg/s-kernel.git /tmp/hi2-p10/k
+          export W=/tmp/hi2-p10
+          export KERNEL_REF=s9/p10-lockscreen-source-guard
+          export BOOT_ARGS="hi=2 panel=1 mali_gov=1 mali_gov_frame=450 mali_probe=1 p3power=1 poster_probe=1 max77705_fg_s=10 max77705_diag=1 max77705_diag_s=30 glstage=1 glcost=1 p0hash=1 p0verify=1"
+          bash /tmp/hi2-preflight.sh | tee /tmp/hi2-p10-result.txt
+          grep -Fq 'S9 P10 preflight PASS: exact lockscreen timers' /tmp/hi2-p10-result.txt
+          if BOOT_ARGS="hi=0 panel=1 mali_gov=1" bash /tmp/hi2-preflight.sh; then
+            echo "::error::P10 accepted missing hi=2 SpringBoard source hook"; exit 1
+          fi
+          mkdir -p /tmp/hi2-p10-bad
+          cp -a /tmp/hi2-p10/k /tmp/hi2-p10-bad/k
+          rm /tmp/hi2-p10-bad/k/userland/src/s9_p10_lock_scene.inc
+          if W=/tmp/hi2-p10-bad bash /tmp/hi2-preflight.sh; then
+            echo "::error::P10 accepted missing SBLockScreenManager and cover sheet proof"; exit 1
+          fi
+          echo 'P10 paired source and P9.1 safe DCS gate PASS; hi=2/missing lock proof rejected'

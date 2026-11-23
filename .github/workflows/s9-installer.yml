@@ -293,6 +293,47 @@ jobs:
                   { echo "::error::P9 hardware source fix/rollback or CPU_OFF interlock missing"; exit 1; }
                 echo 'S9 P9 preflight PASS: GPU physical OFF/ON, panel DCS, touch/USB, Clock, wake cap and P7 CPU_OFF lock'
               fi
+              # P10: userland-exact lockscreen timer source policy, independent
+              # of P9 physical G3D gate. Both linked BOOT and SYSTEM are pinned
+              # to the SAME source SHA. Refuse missing verified lock state or
+              # unsafe general CA/present skip, and KEEP panel DCS disabled.
+              case "$KERNEL_REF" in
+                s9/p10-*) [ -s "$W/k/docs/s9-p10-lockscreen-source-guard.md" ] || {
+                  echo "::error::P10 kernel_ref lacks Lock Screen source guard doc"; exit 1; } ;;
+              esac
+              if [ -s "$W/k/docs/s9-p10-lockscreen-source-guard.md" ]; then
+                echo "S9 P10 paired kernel/userland preflight $(git -C "$W/k" rev-parse --short HEAD)"
+                case " $BOOT_ARGS " in
+                  *" hi=2 "*) ;;
+                  *) echo "::error::P10 requires hi=2 for SpringBoard source-level hook"; exit 1 ;;
+                esac
+                for src in userland/src/s9_p10_lock_scene.inc \
+                           userland/src/s9_p10_lock_policy.h \
+                           userland/src/s9_home_idle.inc \
+                           userland/src/inject.c \
+                           tools/tests/test_s9_p10_lock_policy.c \
+                           tools/tests/test-s9-p10-lockscreen-source.ps1 \
+                           docs/s9-p10-lockscreen-source-guard.md; do
+                  [ -s "$W/k/$src" ] || { echo "::error::P10 missing $src"; exit 1; }
+                done
+                grep -Fq 'hi_lock_policy_sysctl' "$W/k/drivers/gpu/mali/hakios.mali.c" &&
+                grep -Fq 'hi_display_requested_sysctl' "$W/k/drivers/gpu/mali/hakios.mali.c" &&
+                grep -Fq 's9_p10_source' "$W/k/userland/src/s9_home_idle.inc" &&
+                grep -Fq 'hi_p10_maybe_skip' "$W/k/userland/src/s9_home_idle.inc" &&
+                grep -Fq 'hi_p10_is_locked()' "$W/k/userland/src/s9_p10_lock_scene.inc" &&
+                grep -Fq 'SBLockScreenManager' "$W/k/userland/src/s9_p10_lock_scene.inc" &&
+                grep -Fq 'SBCoverSheetWindow' "$W/k/userland/src/s9_p10_lock_scene.inc" &&
+                grep -Fq 'hi_count_animations' "$W/k/userland/src/s9_p10_lock_scene.inc" &&
+                grep -Fq 'S9_P10_PROOF_FRESH_US' "$W/k/userland/src/s9_p10_lock_policy.h" &&
+                grep -Fq 'render_update_always_forwarded=1' "$W/k/userland/src/inject.c" &&
+                grep -Fq "Send-Checked 'sysctl kern.hakios.p9_panel_mode=0'" "$W/k/tools/s9-p9-power-fix.inc.ps1" &&
+                grep -Fq 'P9 PANEL BYPASS VERIFIED' "$W/k/tools/s9-p9-power-fix.inc.ps1" ||
+                  { echo "::error::P10 source verification/tear-free P9.1 recovery missing"; exit 1; }
+                if grep -Fq "Send-Checked 'sysctl kern.hakios.p9_panel_mode=1'" "$W/k/tools/s9-p9-power-fix.inc.ps1"; then
+                    echo "::error::P10 must not re-enable the known bad Samsung panel DCS path"; exit 1
+                fi
+                echo 'S9 P10 preflight PASS: exact lockscreen timers, verified lock/cover, full animation quiet guard, always-forward CA, P9.1 tear-free DCS bypass'
+              fi
               echo "S9 hi=2 preflight: PASS; BOOT+SYSTEM+Windows automation matched at source"
               ;;
           esac
