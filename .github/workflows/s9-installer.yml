@@ -351,10 +351,31 @@ jobs:
               esac
               if [ -s "$W/k/docs/s9-p12-thermal-deep-idle.md" ]; then
                 echo "S9 P12 paired BOOT/SYSTEM/host preflight: $(git -C "$W/k" rev-parse HEAD)"
-                case " $BOOT_ARGS " in
-                  *" p12_gpu_boot_auto=1 "*) ;;
-                  *) echo "::error::P12 full two-track build requires opt-in p12_gpu_boot_auto=1 in boot_args"; exit 1 ;;
-                esac
+                # P12 GPU power-gate is intentionally opt-in. A missing
+                # boot arg must not block CPU thermal diagnostics or WFI
+                # instrumentation; importantly, it must NEVER be described
+                # as an active GPU-gate build unless =1 is actually present.
+                p12_gpu_seen=0
+                p12_gpu_value=0
+                for token in $BOOT_ARGS; do
+                  case "$token" in
+                    p12_gpu_boot_auto=0|p12_gpu_boot_auto=1)
+                      p12_gpu_seen=$((p12_gpu_seen + 1))
+                      p12_gpu_value=${token#*=} ;;
+                    p12_gpu_boot_auto=*)
+                      echo "::error::P12 p12_gpu_boot_auto must be 0 or 1: $token"
+                      exit 1 ;;
+                  esac
+                done
+                if [ "$p12_gpu_seen" -gt 1 ]; then
+                  echo "::error::P12 duplicated p12_gpu_boot_auto= boot-arg (ambiguous kernel behavior)"
+                  exit 1
+                fi
+                if [ "$p12_gpu_value" = 1 ]; then
+                  echo 'S9 P12 GPU physical OFF: p12_gpu_boot_auto=1 requested; actual gate still depends on P9 safety and PMU readbacks'
+                else
+                  echo '::warning::S9 P12 GPU auto-gate NOT enabled (p12_gpu_boot_auto absent or 0). CPU thermal/WFI build continues; to test physical GPU OFF, rerun with p12_gpu_boot_auto=1.'
+                fi
                 for unsafe in sleep_cores=1 syssleep=1 panel_sleep=1 p9_panel_mode=1 mali_dvs=1; do
                   case " $BOOT_ARGS " in
                     *" $unsafe "*) echo "::error::P12 forbids unproven power path: $unsafe"; exit 1 ;;

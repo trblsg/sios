@@ -39,6 +39,22 @@ jobs:
              'source pairing or guarded thermal logic missing'):
             assert required in workflow, required
           assert workflow.index('S9 P12 paired BOOT/SYSTEM/host preflight') < workflow.index('git clone -q --filter=blob:none https://github.com/Scion-Project/scion-installer.git')
-          print('P12 installer source/boot-arg safety guards PASS')
+          assert 'P12 full two-track build requires opt-in' not in workflow
+          # Exercise the exact bash preflight block without running the installer:
+          # absent/0=warning, 1=enabled, malformed/duplicates=fail closed.
+          import os, subprocess
+          fragment='p12_gpu_seen=0'+workflow.split('p12_gpu_seen=0',1)[1].split('for unsafe in sleep_cores=1',1)[0]
+          for arg, success, marker in [
+            ('hi=2',True,'NOT enabled'),
+            ('hi=2 p12_gpu_boot_auto=0',True,'NOT enabled'),
+            ('hi=2 p12_gpu_boot_auto=1',True,'GPU physical OFF'),
+            ('hi=2 p12_gpu_boot_auto=2',False,'must be 0 or 1'),
+            ('hi=2 p12_gpu_boot_auto=1 p12_gpu_boot_auto=0',False,'duplicated'),
+            ('hi=2 p12_gpu_boot_auto=1 p12_gpu_boot_auto=1',False,'duplicated')
+          ]:
+            p=subprocess.run(['bash','-eu','-c',fragment],env={**os.environ,'BOOT_ARGS':arg},capture_output=True,text=True)
+            combined=p.stdout+'\n'+p.stderr
+            assert (p.returncode==0)==success and marker in combined, (arg,p.returncode,combined)
+          print('P12 optional GPU boot policy PASS: 0/absent warn, 1 arms, invalid/duplicate fail')
           PY
           git diff --check
