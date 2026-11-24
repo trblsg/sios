@@ -1,7 +1,7 @@
 name: S9 P12 paired thermal/idle installer guards
 on:
   push:
-    branches: [fix/s9-p12-thermal-idle-installer]
+    branches: [fix/s9-p123-source-installer]
   workflow_dispatch:
 permissions:
   contents: read
@@ -13,7 +13,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Pair kernel and SYSTEM to one P12 commit before heavy installation
         run: |
-          git clone --depth=1 --branch s9/p12-thermal-deep-idle --filter=blob:none https://github.com/trblsg/s-kernel.git /tmp/s9-p12-source
+          git clone --depth=1 --branch s9/p12-3-source-attribution --filter=blob:none https://github.com/trblsg/s-kernel.git /tmp/s9-p12-source
           test -s /tmp/s9-p12-source/drivers/power/exynos/hakios.p12_thermal.h
           test -s /tmp/s9-p12-source/userland/src/inject.c
           test -s /tmp/s9-p12-source/tools/s9-p12-dual-serial.ps1
@@ -34,6 +34,13 @@ jobs:
           grep -Fq 'p122_gpu_stats_sysctl' /tmp/s9-p12-source/drivers/gpu/mali/hakios.mali.c
           grep -Fq 'p122-gl: mode=%d ack=kernel_sysctl' /tmp/s9-p12-source/userland/src/eagl.c
           grep -Fq 'P122-Profile 2' /tmp/s9-p12-source/tools/s9-p122-rootcause-serial.ps1
+          test -s /tmp/s9-p12-source/docs/s9-p123-source-attribution.md
+          test -s /tmp/s9-p12-source/tools/tests/test-s9-p123-source-serial.ps1
+          grep -Fq 'p123_floor_mode_sysctl' /tmp/s9-p12-source/drivers/gpu/mali/hakios.mali.c
+          grep -Fq 'p123-clock-class:' /tmp/s9-p12-source/userland/src/s9_hi_clock_resolve.inc
+          grep -Fq 'p123-ca-window:' /tmp/s9-p12-source/userland/src/inject.c
+          grep -Fq 'p123-gl-window:' /tmp/s9-p12-source/userland/src/eagl.c
+          grep -Fq 'P123-FloorProfile' /tmp/s9-p12-source/tools/s9-p122-rootcause-serial.ps1
           cc -std=c11 -O2 -Wall -Wextra -Werror /tmp/s9-p12-source/tools/tests/test_s9_p122_rootcause.c -o /tmp/test-s9-p122
           /tmp/test-s9-p122
           cc -std=c11 -O2 -Wall -Wextra -Werror /tmp/s9-p12-source/tools/tests/test_s9_p12_thermal_policy.c -o /tmp/test-s9-p12
@@ -53,6 +60,10 @@ jobs:
              'p122-gl: mode=%d ack=kernel_sysctl', 'p122-gl-window:',
              'P122-Profile 0', 'P122-Profile 1', 'P122-Profile 2',
              'test_s9_p122_rootcause.c', 'docs/s9-p122-rootcause.md',
+             'p123_floor_mode_sysctl', 'p123_floor_stats_sysctl',
+             'p123-clock-class:', 'p123-clock-window:', 'p123-ca-window:',
+             'p123-gl-window:', 'P123-FloorProfile', 'P123-ClockTrial',
+             'docs/s9-p123-source-attribution.md', 'test-s9-p123-source-serial.ps1',
              'P12.2 requires exactly one p122=1', 'causal baseline forbids',
              'P12.2 requires panel=1 in boot_args', 'panel=1 enables the panel driver',
              'P9 S6E3HA8 driver requires panel=1',
@@ -77,7 +88,7 @@ jobs:
             ('hi=2 panel=1 p122=1 mali_gov=1',True),
           ]:
             p=subprocess.run(['bash','-eu','-c',panel_fragment],
-              env={**os.environ,'BOOT_ARGS':arg,'KERNEL_REF':'s9/p12-thermal-deep-idle'},capture_output=True,text=True)
+              env={**os.environ,'BOOT_ARGS':arg,'KERNEL_REF':'s9/p12-3-source-attribution'},capture_output=True,text=True)
             assert (p.returncode==0)==success, (arg,p.returncode,p.stdout,p.stderr)
           # Original P12 GPU boot gate: absent/0=warning,1=enabled, bad=fail.
           fragment='p12_gpu_seen=0'+workflow.split('p12_gpu_seen=0',1)[1].split('p122_seen=0',1)[0]
@@ -103,6 +114,9 @@ jobs:
             ('hi=2 p122=1 mali_gov=1 mali_probe=1',False,'mali_gov_frame=450'),
             (base+' p122=1 glcost=1',False,'forbids pre-enabled'),
             (base+' p122=1 p0hash=1',False,'forbids pre-enabled'),
+            (base+' p122=1 g2_bind=1',False,'forbids pre-enabled'),
+            (base+' p122=1 mali_gov_frame=260',False,'duplicated'),
+            (base+' p122=1 mali_gov=0',False,'duplicated'),
             (base+' p122=1 glprof=1000',False,'heavyweight')
           ]:
             p=subprocess.run(['bash','-eu','-c',p122_fragment],env={**os.environ,'BOOT_ARGS':arg},capture_output=True,text=True)

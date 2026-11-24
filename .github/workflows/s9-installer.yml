@@ -34,7 +34,7 @@ on:
         description: The partition the iOS system image is written to
         default: SYSTEM
       boot_args:
-        description: "Extra boot-arguments (for example mali=9, or max77705_wdt=1 max77705_diag=1 max77705_fg_s=30 tmu=3 fps_log=1; for screen-on heat add gov_policy=2 cpufreq_gov_big_max=1469000 mali_gov_frame=455; for P12.2 use kernel_ref=s9/p12-thermal-deep-idle with hi=2 panel=1 p122=1 p12_gpu_boot_auto=1 mali_gov=1 mali_gov_frame=450 mali_probe=1 p3power=1; panel=1 enables the panel driver, NOT DCS sleep; do NOT use panel_sleep=1, p9_panel_mode=1 or sleep_cores=1 (panel wake corruption and CPU3 restart fault); bt=0 wifi_pcie=0 turns the radios off for a test; vmd=0 (new image) leaves the voicemail daemon out; gov_policy=3 can be hotter; see docs/heat.md)"
+        description: "Extra boot-arguments (for example mali=9, or max77705_wdt=1 max77705_diag=1 max77705_fg_s=30 tmu=3 fps_log=1; for screen-on heat add gov_policy=2 cpufreq_gov_big_max=1469000 mali_gov_frame=455; for P12.3 use kernel_ref=s9/p12-3-source-attribution with hi=2 panel=1 p122=1 p12_gpu_boot_auto=1 mali_gov=1 mali_gov_frame=450 mali_probe=1 p3power=1; panel=1 enables the panel driver, NOT DCS sleep; do NOT use panel_sleep=1, p9_panel_mode=1 or sleep_cores=1 (panel wake corruption and CPU3 restart fault); bt=0 wifi_pcie=0 turns the radios off for a test; vmd=0 (new image) leaves the voicemail daemon out; gov_policy=3 can be hotter; see docs/heat.md)"
         default: ""
       metal:
         description: "Metal on Vulkan for the S9's Mali-G72, on by default: build PanVK and metal2vulkan and boot apps on Metal (metal=2 camtl=0; the window server stays GLES). Set false for a GLES-only image (metal=0). Use kernel_ref=s9/anan and fps=true or this input to log fps: for tools/fps.py"
@@ -408,10 +408,19 @@ jobs:
                     *) echo "::error::P12.2 baseline requires $required_p122 (matched GPU DVFS/clock-floor observer)"; exit 1 ;;
                   esac
                 done
-                for unsafe_diag in glcost=1 glstage=1 glpath=1 glhash=1 p0hash=1 p0verify=1 glerrors=1 glerrors=2; do
+                for unsafe_diag in glcost=1 glstage=1 glpath=1 glhash=1 p0hash=1 p0verify=1 glerrors=1 glerrors=2 g2_bind=1 g21_diag=1 g2_verify=1; do
                   case " $BOOT_ARGS " in
                     *" $unsafe_diag "*) echo "::error::P12.2 causal baseline forbids pre-enabled per-call profiler: $unsafe_diag"; exit 1 ;;
                   esac
+                done
+                # P12.3's lower-only trial expects the tested 3-level table
+                # and no conflicting effective frame-floor values.
+                for key in mali_gov mali_gov_frame mali_probe; do
+                  count=0
+                  for token in $BOOT_ARGS; do
+                    case "$token" in "$key"=*) count=$((count + 1));; esac
+                  done
+                  [ "$count" -eq 1 ] || { echo "::error::P12.3 duplicated or missing $key"; exit 1; }
                 done
                 for token in $BOOT_ARGS; do
                   case "$token" in
@@ -439,7 +448,11 @@ jobs:
                            tools/tests/test-s9-p122-rootcause-serial.ps1 \
                            tools/tests/test_s9_p122_rootcause.c \
                            docs/s9-p12-thermal-deep-idle.md \
-                           docs/s9-p122-rootcause.md; do
+                           docs/s9-p122-rootcause.md \
+                           docs/s9-p123-source-attribution.md \
+                           tools/tests/test-s9-p123-source-serial.ps1 \
+                           userland/src/s9_hi_clock_resolve.inc \
+                           userland/src/inject_sb.c; do
                   [ -s "$W/k/$src" ] || { echo "::error::P12 missing paired source: $src"; exit 1; }
                 done
                 grep -Fq 'power/exynos bsd/dev/hakios.p12_thermal.h' "$W/k/drivers/map" &&
@@ -460,6 +473,18 @@ jobs:
                 grep -Fq 'p122_gpu_stats_sysctl' "$W/k/drivers/gpu/mali/hakios.mali.c" &&
                 grep -Fq 'p122_job_latency' "$W/k/drivers/gpu/mali/hakios.mali.c" &&
                 grep -Fq 'p122_gov_forced' "$W/k/drivers/gpu/mali/hakios.mali.c" &&
+                grep -Fq 'p123_floor_mode_sysctl' "$W/k/drivers/gpu/mali/hakios.mali.c" &&
+                grep -Fq 'p123_floor_stats_sysctl' "$W/k/drivers/gpu/mali/hakios.mali.c" &&
+                grep -Fq 's9_p123_floor_eligible' "$W/k/drivers/gpu/mali/hakios.mali.c" &&
+                grep -Fq 'hakios_p123_input_quiet' "$W/k/drivers/power/exynos/hakios.exynos_cpufreq.c" &&
+                grep -Fq 'p123-clock-class:' "$W/k/userland/src/s9_hi_clock_resolve.inc" &&
+                grep -Fq 'crossover_requires_explicit_252' "$W/k/userland/src/s9_home_idle.inc" &&
+                grep -Fq 'p123-clock-window:' "$W/k/userland/src/s9_home_idle.inc" &&
+                grep -Fq 'p123-ca-window:' "$W/k/userland/src/inject.c" &&
+                grep -Fq 'p123-gl-window:' "$W/k/userland/src/eagl.c" &&
+                grep -Fq 'P123-FloorProfile' "$W/k/tools/s9-p122-rootcause-serial.ps1" &&
+                grep -Fq 'P123-ClockTrial' "$W/k/tools/s9-p122-rootcause-serial.ps1" &&
+                grep -Fq "P12-Query 'p123_floor_mode' '0' -Cleanup" "$W/k/tools/s9-p122-rootcause-serial.ps1" &&
                 grep -Fq 'p122-gl: mode=%d ack=kernel_sysctl' "$W/k/userland/src/eagl.c" &&
                 grep -Fq 'p122-gl-window:' "$W/k/userland/src/eagl.c" &&
                 grep -Fq 's9_p122_frame_add' "$W/k/userland/src/eagl.c" &&
@@ -494,7 +519,7 @@ jobs:
                    -o "$W/bin/s9-p122-rootcause" &&
                 "$W/bin/s9-p122-rootcause" ||
                   { echo "::error::P12.2 C11 histogram and mode guard regression failed"; exit 1; }
-                echo 'S9 P12.2 paired preflight PASS: root-cause GLES/Mali histograms, cool-start, mode0 hot restore, HI2 and CPU3 interlocks, no profiler/FPS/PMIC boot contamination'
+                echo 'S9 P12.3 paired preflight PASS: Clock identity, source windows, GL shadow, 30s lower-only floor, mode0 hot restore, CPU3/P9 interlocks'
               fi
               echo "S9 hi=2 preflight: PASS; BOOT+SYSTEM+Windows automation matched at source"
               ;;
