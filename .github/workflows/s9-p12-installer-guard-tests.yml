@@ -17,6 +17,9 @@ jobs:
           test -s /tmp/s9-p12-source/drivers/power/exynos/hakios.p12_thermal.h
           test -s /tmp/s9-p12-source/userland/src/inject.c
           test -s /tmp/s9-p12-source/tools/s9-p12-dual-serial.ps1
+          test -s /tmp/s9-p12-source/tools/s9-p122-rootcause-serial.ps1
+          test -s /tmp/s9-p12-source/drivers/gpu/mali/hakios.p122_diag.h
+          test -s /tmp/s9-p12-source/userland/src/s9_p122_frame_diag.h
           grep -Fq 'p12_gpu_boot_auto' /tmp/s9-p12-source/drivers/gpu/mali/hakios.mali.c
           grep -Fq 'p12_gpu_boot_enable' /tmp/s9-p12-source/drivers/gpu/mali/hakios.mali_lab.h
           grep -Fq 'p12-ca: forwarded=' /tmp/s9-p12-source/userland/src/inject.c
@@ -27,6 +30,12 @@ jobs:
           grep -Fq 'P12-CoolStart 12' /tmp/s9-p12-source/tools/s9-p12-dual-serial.ps1
           grep -Fq 'P12-QuiesceHI2' /tmp/s9-p12-source/tools/s9-p12-dual-serial.ps1
           grep -Fq 'P12HiGateStopSeen' /tmp/s9-p12-source/tools/s9-p12-dual-serial.ps1
+          grep -Fq 'p122_diag_mode_sysctl' /tmp/s9-p12-source/drivers/gpu/mali/hakios.mali.c
+          grep -Fq 'p122_gpu_stats_sysctl' /tmp/s9-p12-source/drivers/gpu/mali/hakios.mali.c
+          grep -Fq 'p122-gl: mode=%d ack=kernel_sysctl' /tmp/s9-p12-source/userland/src/eagl.c
+          grep -Fq 'P122-Profile 2' /tmp/s9-p12-source/tools/s9-p122-rootcause-serial.ps1
+          cc -std=c11 -O2 -Wall -Wextra -Werror /tmp/s9-p12-source/tools/tests/test_s9_p122_rootcause.c -o /tmp/test-s9-p122
+          /tmp/test-s9-p122
           cc -std=c11 -O2 -Wall -Wextra -Werror /tmp/s9-p12-source/tools/tests/test_s9_p12_thermal_policy.c -o /tmp/test-s9-p12
           /tmp/test-s9-p12
       - name: Verify installer source guard, boot-args and no unsafe power combination
@@ -40,6 +49,11 @@ jobs:
              'p12_gpu_boot_stats_sysctl', 'p12_wfi_stats_sysctl', 'p12_idle_diag_sysctl',
              'hakios_p12_idle_enter', 'hakios_p12_idle_denied',
              'P12-CoolStart 12', 'P12-EarlyThermalGuard', 'P12-QuiesceHI2',
+             'p122_diag_mode_sysctl', 'p122_gpu_stats_sysctl', 'p122_job_latency',
+             'p122-gl: mode=%d ack=kernel_sysctl', 'p122-gl-window:',
+             'P122-Profile 0', 'P122-Profile 1', 'P122-Profile 2',
+             'test_s9_p122_rootcause.c', 'docs/s9-p122-rootcause.md',
+             'P12.2 requires exactly one p122=1', 'causal baseline forbids',
              'P12HiGateStopSeen', 'if($InteractiveAB)', 'PASSIVE_ON',
              'if(-not $Cleanup){Life-CheckSafety', 'P12.1 MANUAL_WAKE VERIFIED',
              'g3d_lab_stats_sysctl', 'p12-ca: forwarded=', 'test_s9_p12_thermal_policy.c',
@@ -64,6 +78,22 @@ jobs:
             p=subprocess.run(['bash','-eu','-c',fragment],env={**os.environ,'BOOT_ARGS':arg},capture_output=True,text=True)
             combined=p.stdout+'\n'+p.stderr
             assert (p.returncode==0)==success and marker in combined, (arg,p.returncode,combined)
-          print('P12 optional GPU boot policy PASS: 0/absent warn, 1 arms, invalid/duplicate fail')
+          # P12.2 exact bootarg preflight: opt-in required and no old GL profiler contamination.
+          p122_fragment='p122_seen=0'+workflow.split('p122_seen=0',1)[1].split('for unsafe in sleep_cores=1',1)[0]
+          base='hi=2 mali_gov=1 mali_gov_frame=450 mali_probe=1'
+          for arg, success, marker in [
+            (base,False,'requires exactly one p122=1'),
+            (base+' p122=1',True,''),
+            (base+' p122=0',False,'must equal 1'),
+            (base+' p122=1 p122=1',False,'exactly one'),
+            ('hi=2 p122=1 mali_gov=1 mali_probe=1',False,'mali_gov_frame=450'),
+            (base+' p122=1 glcost=1',False,'forbids pre-enabled'),
+            (base+' p122=1 p0hash=1',False,'forbids pre-enabled'),
+            (base+' p122=1 glprof=1000',False,'heavyweight')
+          ]:
+            p=subprocess.run(['bash','-eu','-c',p122_fragment],env={**os.environ,'BOOT_ARGS':arg},capture_output=True,text=True)
+            combined=p.stdout+'\n'+p.stderr
+            assert (p.returncode==0)==success and marker in combined, (arg,p.returncode,combined)
+          print('P12.2 opt-in and profiler clean baseline PASS; old GPU boot policy 0/absent warn, 1 arms, invalid/duplicate fail')
           PY
           git diff --check

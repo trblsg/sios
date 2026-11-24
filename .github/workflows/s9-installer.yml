@@ -376,6 +376,38 @@ jobs:
                 else
                   echo '::warning::S9 P12 GPU auto-gate NOT enabled (p12_gpu_boot_auto absent or 0). CPU thermal/WFI build continues; to test physical GPU OFF, rerun with p12_gpu_boot_auto=1.'
                 fi
+                # P12.2 is a paired causal-diagnostics build: require its
+                # userland hook, not just a kernel sysctl that silently
+                # records no GL data. Distinguish default minimal from
+                # old glcost/glstage/checksum profilers before building.
+                p122_seen=0
+                for token in $BOOT_ARGS; do
+                  case "$token" in
+                    p122=1) p122_seen=$((p122_seen + 1)) ;;
+                    p122=*) echo "::error::P12.2 p122 must equal 1: $token"; exit 1 ;;
+                  esac
+                done
+                if [ "$p122_seen" -ne 1 ]; then
+                  echo '::error::P12.2 requires exactly one p122=1 in boot_args (new matched GLES diagnostics)'
+                  exit 1
+                fi
+                for required_p122 in mali_gov=1 mali_gov_frame=450 mali_probe=1; do
+                  case " $BOOT_ARGS " in
+                    *" $required_p122 "*) ;;
+                    *) echo "::error::P12.2 baseline requires $required_p122 (matched GPU DVFS/clock-floor observer)"; exit 1 ;;
+                  esac
+                done
+                for unsafe_diag in glcost=1 glstage=1 glpath=1 glhash=1 p0hash=1 p0verify=1 glerrors=1 glerrors=2; do
+                  case " $BOOT_ARGS " in
+                    *" $unsafe_diag "*) echo "::error::P12.2 causal baseline forbids pre-enabled per-call profiler: $unsafe_diag"; exit 1 ;;
+                  esac
+                done
+                for token in $BOOT_ARGS; do
+                  case "$token" in
+                    glprof=*|gltrace=*)
+                      echo "::error::P12.2 cannot use heavyweight GL stack/per-call tracing in BOOT: $token"; exit 1 ;;
+                  esac
+                done
                 for unsafe in sleep_cores=1 syssleep=1 panel_sleep=1 p9_panel_mode=1 mali_dvs=1; do
                   case " $BOOT_ARGS " in
                     *" $unsafe "*) echo "::error::P12 forbids unproven power path: $unsafe"; exit 1 ;;
@@ -387,10 +419,16 @@ jobs:
                            drivers/gpu/mali/hakios.mali_lab.h \
                            drivers/gpu/mali/hakios.mali.c \
                            xnu/files/cpu.c userland/src/inject.c \
+                           drivers/gpu/mali/hakios.p122_diag.h \
+                           userland/src/s9_p122_frame_diag.h \
                            tools/s9-p12-dual-serial.ps1 \
+                           tools/s9-p122-rootcause-serial.ps1 \
                            tools/s9-screen-lifecycle-serial.ps1 \
                            tools/tests/test-s9-p12-dual-serial.ps1 \
-                           docs/s9-p12-thermal-deep-idle.md; do
+                           tools/tests/test-s9-p122-rootcause-serial.ps1 \
+                           tools/tests/test_s9_p122_rootcause.c \
+                           docs/s9-p12-thermal-deep-idle.md \
+                           docs/s9-p122-rootcause.md; do
                   [ -s "$W/k/$src" ] || { echo "::error::P12 missing paired source: $src"; exit 1; }
                 done
                 grep -Fq 'power/exynos bsd/dev/hakios.p12_thermal.h' "$W/k/drivers/map" &&
@@ -407,6 +445,18 @@ jobs:
                 grep -Fq 'p12_gpu_boot_stats_sysctl' "$W/k/drivers/gpu/mali/hakios.mali_lab.h" &&
                 grep -Fq 'g3d_lab_stats_sysctl' "$W/k/drivers/gpu/mali/hakios.mali_lab.h" &&
                 grep -Fq 'g3d_lab_protection_ok' "$W/k/drivers/gpu/mali/hakios.mali_lab.h" &&
+                grep -Fq 'p122_diag_mode_sysctl' "$W/k/drivers/gpu/mali/hakios.mali.c" &&
+                grep -Fq 'p122_gpu_stats_sysctl' "$W/k/drivers/gpu/mali/hakios.mali.c" &&
+                grep -Fq 'p122_job_latency' "$W/k/drivers/gpu/mali/hakios.mali.c" &&
+                grep -Fq 'p122_gov_forced' "$W/k/drivers/gpu/mali/hakios.mali.c" &&
+                grep -Fq 'p122-gl: mode=%d ack=kernel_sysctl' "$W/k/userland/src/eagl.c" &&
+                grep -Fq 'p122-gl-window:' "$W/k/userland/src/eagl.c" &&
+                grep -Fq 's9_p122_frame_add' "$W/k/userland/src/eagl.c" &&
+                grep -Fq 'P122-Profile 0' "$W/k/tools/s9-p122-rootcause-serial.ps1" &&
+                grep -Fq 'P122-Profile 1' "$W/k/tools/s9-p122-rootcause-serial.ps1" &&
+                grep -Fq 'P122-Profile 2' "$W/k/tools/s9-p122-rootcause-serial.ps1" &&
+                grep -Fq 'P122-Deltas' "$W/k/tools/s9-p122-rootcause-serial.ps1" &&
+                grep -Fq "P12-Query 'p122_diag_mode' '0' -Cleanup" "$W/k/tools/s9-p122-rootcause-serial.ps1" &&
                 grep -Fq 'P12-CoolStart 12' "$W/k/tools/s9-p12-dual-serial.ps1" &&
                 grep -Fq 'P12-EarlyThermalGuard' "$W/k/tools/s9-p12-dual-serial.ps1" &&
                 grep -Fq 'P12-QuiesceHI2' "$W/k/tools/s9-p12-dual-serial.ps1" &&
@@ -428,7 +478,12 @@ jobs:
                    -o "$W/bin/s9-p12-policy" &&
                 "$W/bin/s9-p12-policy" ||
                   { echo "::error::P12 C11 no-touch/late-frame power guard regression failed"; exit 1; }
-                echo 'S9 P12.1 preflight PASS: cool-start, hot cleanup, HI2 crossover isolation, WFI entry/exit reasons, P9 GPU physical OFF/wake, CPU3 OFF interlock, DCS bypass, no global frame skip'
+                cc -std=c11 -O2 -Wall -Wextra -Werror \
+                   "$W/k/tools/tests/test_s9_p122_rootcause.c" \
+                   -o "$W/bin/s9-p122-rootcause" &&
+                "$W/bin/s9-p122-rootcause" ||
+                  { echo "::error::P12.2 C11 histogram and mode guard regression failed"; exit 1; }
+                echo 'S9 P12.2 paired preflight PASS: root-cause GLES/Mali histograms, cool-start, mode0 hot restore, HI2 and CPU3 interlocks, no profiler/FPS/PMIC boot contamination'
               fi
               echo "S9 hi=2 preflight: PASS; BOOT+SYSTEM+Windows automation matched at source"
               ;;
