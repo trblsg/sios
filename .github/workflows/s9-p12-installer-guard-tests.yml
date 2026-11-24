@@ -1,0 +1,44 @@
+name: S9 P12 paired thermal/idle installer guards
+on:
+  push:
+    branches: [fix/s9-p12-thermal-idle-installer]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source-guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pair kernel and SYSTEM to one P12 commit before heavy installation
+        run: |
+          git clone --depth=1 --branch s9/p12-thermal-deep-idle --filter=blob:none https://github.com/trblsg/s-kernel.git /tmp/s9-p12-source
+          test -s /tmp/s9-p12-source/drivers/power/exynos/hakios.p12_thermal.h
+          test -s /tmp/s9-p12-source/userland/src/inject.c
+          test -s /tmp/s9-p12-source/tools/s9-p12-dual-serial.ps1
+          grep -Fq 'p12_gpu_boot_auto' /tmp/s9-p12-source/drivers/gpu/mali/hakios.mali.c
+          grep -Fq 'p12_gpu_boot_enable' /tmp/s9-p12-source/drivers/gpu/mali/hakios.mali_lab.h
+          grep -Fq 'p12-ca: forwarded=' /tmp/s9-p12-source/userland/src/inject.c
+          grep -Fq 'p12_cpu_mode_sysctl' /tmp/s9-p12-source/drivers/power/exynos/hakios.exynos_cpufreq.c
+          grep -Fq 'p12_wfi_stats_sysctl' /tmp/s9-p12-source/drivers/power/exynos/hakios.exynos_cpufreq.c
+          cc -std=c11 -O2 -Wall -Wextra -Werror /tmp/s9-p12-source/tools/tests/test_s9_p12_thermal_policy.c -o /tmp/test-s9-p12
+          /tmp/test-s9-p12
+      - name: Verify installer source guard, boot-args and no unsafe power combination
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          workflow=Path('.github/workflows/s9-installer.yml').read_text()
+          for required in ('s9/p12-*', 'docs/s9-p12-thermal-deep-idle.md',
+             'p12_gpu_boot_auto=1', 'power/exynos bsd/dev/hakios.p12_thermal.h',
+             'p12_cpu_mode_sysctl', 'p12_gpu_boot_enable',
+             'p12_gpu_boot_stats_sysctl', 'p12_wfi_stats_sysctl',
+             'g3d_lab_stats_sysctl', 'p12-ca: forwarded=', 'test_s9_p12_thermal_policy.c',
+             'p8-safety: BIG CPU_OFF REFUSED', 'panel_sleep=1', 'sleep_cores=1',
+             'syssleep=1', 'p9_panel_mode=1', 'mali_dvs=1',
+             'source pairing or guarded thermal logic missing'):
+            assert required in workflow, required
+          assert workflow.index('S9 P12 paired BOOT/SYSTEM/host preflight') < workflow.index('git clone -q --filter=blob:none https://github.com/Scion-Project/scion-installer.git')
+          print('P12 installer source/boot-arg safety guards PASS')
+          PY
+          git diff --check

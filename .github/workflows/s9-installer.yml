@@ -34,7 +34,7 @@ on:
         description: The partition the iOS system image is written to
         default: SYSTEM
       boot_args:
-        description: "Extra boot-arguments (for example mali=9, or max77705_wdt=1 max77705_diag=1 max77705_fg_s=30 tmu=3 fps_log=1; for screen-on heat add gov_policy=2 cpufreq_gov_big_max=1469000 mali_gov_frame=455; for screen-off heat add panel_sleep=1 sleep_cores=1 (sleep_cores=1 needs console-irq-guard d8930fa5 or later: before it, the S9's cluster-type-less tree chose no core); bt=0 wifi_pcie=0 turns the radios off for a test; vmd=0 (new image) leaves the voicemail daemon out; gov_policy=3 can be hotter; see docs/heat.md)"
+        description: "Extra boot-arguments (for example mali=9, or max77705_wdt=1 max77705_diag=1 max77705_fg_s=30 tmu=3 fps_log=1; for screen-on heat add gov_policy=2 cpufreq_gov_big_max=1469000 mali_gov_frame=455; for P12 two-track use kernel_ref=s9/p12-thermal-deep-idle with hi=2 p12_gpu_boot_auto=1; do NOT use panel_sleep=1 or sleep_cores=1 (panel wake corruption and CPU3 restart fault); bt=0 wifi_pcie=0 turns the radios off for a test; vmd=0 (new image) leaves the voicemail daemon out; gov_policy=3 can be hotter; see docs/heat.md)"
         default: ""
       metal:
         description: "Metal on Vulkan for the S9's Mali-G72, on by default: build PanVK and metal2vulkan and boot apps on Metal (metal=2 camtl=0; the window server stays GLES). Set false for a GLES-only image (metal=0). Use kernel_ref=s9/anan and fps=true or this input to log fps: for tools/fps.py"
@@ -342,6 +342,58 @@ jobs:
                     echo "::error::P10 must not re-enable the known bad Samsung panel DCS path"; exit 1
                 fi
                 echo 'S9 P10 preflight PASS: exact lockscreen timers, verified lock/cover, full animation quiet guard, always-forward CA, P9.1 tear-free DCS bypass'
+              fi
+              # P12: matched thermal + physical idle work in ONE BOOT/SYSTEM.
+              # Source is pinned by kernel_ref before either image is built.
+              case "$KERNEL_REF" in
+                s9/p12-*) [ -s "$W/k/docs/s9-p12-thermal-deep-idle.md" ] || {
+                  echo "::error::P12 kernel_ref lacks matched P12 thermal/idle source"; exit 1; } ;;
+              esac
+              if [ -s "$W/k/docs/s9-p12-thermal-deep-idle.md" ]; then
+                echo "S9 P12 paired BOOT/SYSTEM/host preflight: $(git -C "$W/k" rev-parse HEAD)"
+                case " $BOOT_ARGS " in
+                  *" p12_gpu_boot_auto=1 "*) ;;
+                  *) echo "::error::P12 full two-track build requires opt-in p12_gpu_boot_auto=1 in boot_args"; exit 1 ;;
+                esac
+                for unsafe in sleep_cores=1 syssleep=1 panel_sleep=1 p9_panel_mode=1 mali_dvs=1; do
+                  case " $BOOT_ARGS " in
+                    *" $unsafe "*) echo "::error::P12 forbids unproven power path: $unsafe"; exit 1 ;;
+                  esac
+                done
+                for src in drivers/power/exynos/hakios.p12_thermal.h \
+                           tools/tests/test_s9_p12_thermal_policy.c \
+                           drivers/power/exynos/hakios.exynos_cpufreq.c \
+                           drivers/gpu/mali/hakios.mali_lab.h \
+                           drivers/gpu/mali/hakios.mali.c \
+                           xnu/files/cpu.c userland/src/inject.c \
+                           tools/s9-p12-dual-serial.ps1 \
+                           tools/s9-screen-lifecycle-serial.ps1 \
+                           tools/tests/test-s9-p12-dual-serial.ps1 \
+                           docs/s9-p12-thermal-deep-idle.md; do
+                  [ -s "$W/k/$src" ] || { echo "::error::P12 missing paired source: $src"; exit 1; }
+                done
+                grep -Fq 'power/exynos bsd/dev/hakios.p12_thermal.h' "$W/k/drivers/map" &&
+                grep -Fq '#include "hakios.p12_thermal.h"' "$W/k/drivers/power/exynos/hakios.exynos_cpufreq.c" &&
+                grep -Fq 'p12_cpu_mode_sysctl' "$W/k/drivers/power/exynos/hakios.exynos_cpufreq.c" &&
+                grep -Fq 'p12_wfi_stats_sysctl' "$W/k/drivers/power/exynos/hakios.exynos_cpufreq.c" &&
+                grep -Fq 'hakios_p12_wfi_entries' "$W/k/xnu/files/cpu.c" &&
+                grep -Fq 'p12_gpu_boot_enable' "$W/k/drivers/gpu/mali/hakios.mali_lab.h" &&
+                grep -Fq 'p12_gpu_boot_auto' "$W/k/drivers/gpu/mali/hakios.mali.c" &&
+                grep -Fq 'p12_gpu_boot_stats_sysctl' "$W/k/drivers/gpu/mali/hakios.mali_lab.h" &&
+                grep -Fq 'g3d_lab_stats_sysctl' "$W/k/drivers/gpu/mali/hakios.mali_lab.h" &&
+                grep -Fq 'g3d_lab_protection_ok' "$W/k/drivers/gpu/mali/hakios.mali_lab.h" &&
+                grep -Fq 'p12-ca: forwarded=' "$W/k/userland/src/inject.c" &&
+                grep -Fq 'orig_render_update(server, update, flags)' "$W/k/userland/src/inject.c" &&
+                grep -Fq 'if(value==1)return EPERM;' "$W/k/drivers/power/exynos/hakios.p7_cpu_lab.h" &&
+                grep -Fq 'p8-safety: BIG CPU_OFF REFUSED' "$W/k/xnu/files/GenericARMPE.cpp" &&
+                grep -Fq 'int hakios_p9_panel_auto_on(void) { return 0; }' "$W/k/drivers/core/hakios.stubs.c" ||
+                  { echo "::error::P12 hardware interlock, source pairing or guarded thermal logic missing"; exit 1; }
+                cc -std=c11 -O2 -Wall -Wextra -Werror \
+                   "$W/k/tools/tests/test_s9_p12_thermal_policy.c" \
+                   -o "$W/bin/s9-p12-policy" &&
+                "$W/bin/s9-p12-policy" ||
+                  { echo "::error::P12 C11 no-touch/late-frame power guard regression failed"; exit 1; }
+                echo 'S9 P12 preflight PASS: paired source SHA, P9 G3D wake guards, CPU3 OFF interlock, DCS bypass, no global frame skip'
               fi
               echo "S9 hi=2 preflight: PASS; BOOT+SYSTEM+Windows automation matched at source"
               ;;
