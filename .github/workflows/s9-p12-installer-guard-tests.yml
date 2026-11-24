@@ -22,6 +22,11 @@ jobs:
           grep -Fq 'p12-ca: forwarded=' /tmp/s9-p12-source/userland/src/inject.c
           grep -Fq 'p12_cpu_mode_sysctl' /tmp/s9-p12-source/drivers/power/exynos/hakios.exynos_cpufreq.c
           grep -Fq 'p12_wfi_stats_sysctl' /tmp/s9-p12-source/drivers/power/exynos/hakios.exynos_cpufreq.c
+          grep -Fq 'p12_idle_diag_sysctl' /tmp/s9-p12-source/drivers/power/exynos/hakios.exynos_cpufreq.c
+          grep -Fq 'hakios_p12_idle_enter' /tmp/s9-p12-source/xnu/files/cpu.c
+          grep -Fq 'P12-CoolStart 12' /tmp/s9-p12-source/tools/s9-p12-dual-serial.ps1
+          grep -Fq 'P12-QuiesceHI2' /tmp/s9-p12-source/tools/s9-p12-dual-serial.ps1
+          grep -Fq 'P12HiGateStopSeen' /tmp/s9-p12-source/tools/s9-p12-dual-serial.ps1
           cc -std=c11 -O2 -Wall -Wextra -Werror /tmp/s9-p12-source/tools/tests/test_s9_p12_thermal_policy.c -o /tmp/test-s9-p12
           /tmp/test-s9-p12
       - name: Verify installer source guard, boot-args and no unsafe power combination
@@ -32,7 +37,11 @@ jobs:
           for required in ('s9/p12-*', 'docs/s9-p12-thermal-deep-idle.md',
              'p12_gpu_boot_auto=1', 'power/exynos bsd/dev/hakios.p12_thermal.h',
              'p12_cpu_mode_sysctl', 'p12_gpu_boot_enable',
-             'p12_gpu_boot_stats_sysctl', 'p12_wfi_stats_sysctl',
+             'p12_gpu_boot_stats_sysctl', 'p12_wfi_stats_sysctl', 'p12_idle_diag_sysctl',
+             'hakios_p12_idle_enter', 'hakios_p12_idle_denied',
+             'P12-CoolStart 12', 'P12-EarlyThermalGuard', 'P12-QuiesceHI2',
+             'P12HiGateStopSeen', 'if($InteractiveAB)', 'PASSIVE_ON',
+             'if(-not $Cleanup){Life-CheckSafety', 'P12.1 MANUAL_WAKE VERIFIED',
              'g3d_lab_stats_sysctl', 'p12-ca: forwarded=', 'test_s9_p12_thermal_policy.c',
              'p8-safety: BIG CPU_OFF REFUSED', 'panel_sleep=1', 'sleep_cores=1',
              'syssleep=1', 'p9_panel_mode=1', 'mali_dvs=1',

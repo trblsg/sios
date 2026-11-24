@@ -397,12 +397,26 @@ jobs:
                 grep -Fq '#include "hakios.p12_thermal.h"' "$W/k/drivers/power/exynos/hakios.exynos_cpufreq.c" &&
                 grep -Fq 'p12_cpu_mode_sysctl' "$W/k/drivers/power/exynos/hakios.exynos_cpufreq.c" &&
                 grep -Fq 'p12_wfi_stats_sysctl' "$W/k/drivers/power/exynos/hakios.exynos_cpufreq.c" &&
+                grep -Fq 'p12_idle_diag_sysctl' "$W/k/drivers/power/exynos/hakios.exynos_cpufreq.c" &&
                 grep -Fq 'hakios_p12_wfi_entries' "$W/k/xnu/files/cpu.c" &&
+                grep -Fq 'hakios_p12_idle_enter' "$W/k/xnu/files/cpu.c" &&
+                grep -Fq 'hakios_p12_idle_denied' "$W/k/xnu/files/cpu.c" &&
+                grep -Fq 'hakios_p12_idle_wfi_path' "$W/k/xnu/files/cpu.c" &&
                 grep -Fq 'p12_gpu_boot_enable' "$W/k/drivers/gpu/mali/hakios.mali_lab.h" &&
                 grep -Fq 'p12_gpu_boot_auto' "$W/k/drivers/gpu/mali/hakios.mali.c" &&
                 grep -Fq 'p12_gpu_boot_stats_sysctl' "$W/k/drivers/gpu/mali/hakios.mali_lab.h" &&
                 grep -Fq 'g3d_lab_stats_sysctl' "$W/k/drivers/gpu/mali/hakios.mali_lab.h" &&
                 grep -Fq 'g3d_lab_protection_ok' "$W/k/drivers/gpu/mali/hakios.mali_lab.h" &&
+                grep -Fq 'P12-CoolStart 12' "$W/k/tools/s9-p12-dual-serial.ps1" &&
+                grep -Fq 'P12-EarlyThermalGuard' "$W/k/tools/s9-p12-dual-serial.ps1" &&
+                grep -Fq 'P12-QuiesceHI2' "$W/k/tools/s9-p12-dual-serial.ps1" &&
+                grep -Fq 'P12HiGateStopSeen' "$W/k/tools/s9-p12-dual-serial.ps1" &&
+                grep -Fq 'if($InteractiveAB)' "$W/k/tools/s9-p12-dual-serial.ps1" &&
+                grep -Fq 'P12-Observe '\''PASSIVE_ON'\''' "$W/k/tools/s9-p12-dual-serial.ps1" &&
+                grep -Fq 'if(-not $Cleanup){Life-CheckSafety' "$W/k/tools/s9-p12-dual-serial.ps1" &&
+                grep -Fq 'P12.1 MANUAL_WAKE VERIFIED' "$W/k/tools/s9-p12-dual-serial.ps1" &&
+                grep -Fq 'if(command==0 || command==201)' "$W/k/userland/src/s9_home_idle.inc" &&
+                grep -Fq 'S9 P12.1 NATURAL SCREEN LIFECYCLE' "$W/k/tools/s9-screen-lifecycle-serial.ps1" &&
                 grep -Fq 'p12-ca: forwarded=' "$W/k/userland/src/inject.c" &&
                 grep -Fq 'orig_render_update(server, update, flags)' "$W/k/userland/src/inject.c" &&
                 grep -Fq 'if(value==1)return EPERM;' "$W/k/drivers/power/exynos/hakios.p7_cpu_lab.h" &&
@@ -414,7 +428,7 @@ jobs:
                    -o "$W/bin/s9-p12-policy" &&
                 "$W/bin/s9-p12-policy" ||
                   { echo "::error::P12 C11 no-touch/late-frame power guard regression failed"; exit 1; }
-                echo 'S9 P12 preflight PASS: paired source SHA, P9 G3D wake guards, CPU3 OFF interlock, DCS bypass, no global frame skip'
+                echo 'S9 P12.1 preflight PASS: cool-start, hot cleanup, HI2 crossover isolation, WFI entry/exit reasons, P9 GPU physical OFF/wake, CPU3 OFF interlock, DCS bypass, no global frame skip'
               fi
               echo "S9 hi=2 preflight: PASS; BOOT+SYSTEM+Windows automation matched at source"
               ;;
