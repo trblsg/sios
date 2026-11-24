@@ -54,6 +54,8 @@ jobs:
              'P122-Profile 0', 'P122-Profile 1', 'P122-Profile 2',
              'test_s9_p122_rootcause.c', 'docs/s9-p122-rootcause.md',
              'P12.2 requires exactly one p122=1', 'causal baseline forbids',
+             'P12.2 requires panel=1 in boot_args', 'panel=1 enables the panel driver',
+             'P9 S6E3HA8 driver requires panel=1',
              'P12HiGateStopSeen', 'if($InteractiveAB)', 'PASSIVE_ON',
              'if(-not $Cleanup){Life-CheckSafety', 'P12.1 MANUAL_WAKE VERIFIED',
              'g3d_lab_stats_sysctl', 'p12-ca: forwarded=', 'test_s9_p12_thermal_policy.c',
@@ -63,9 +65,21 @@ jobs:
             assert required in workflow, required
           assert workflow.index('S9 P12 paired BOOT/SYSTEM/host preflight') < workflow.index('git clone -q --filter=blob:none https://github.com/Scion-Project/scion-installer.git')
           assert 'P12 full two-track build requires opt-in' not in workflow
-          # Exercise the exact bash preflight block without running the installer:
-          # absent/0=warning, 1=enabled, malformed/duplicates=fail closed.
+          # Exercise exact shell guards without fetching any device firmware.
+          # panel=1 enables the PANEL DRIVER; panel_sleep=1 is forbidden
+          # separately because the real P9 hardware wake corrupted the image.
           import os, subprocess
+          panel_fragment='case "$KERNEL_REF" in'+workflow.split('case "$KERNEL_REF" in',1)[1].split('ARGS="$BOOT_ARGS"',1)[0]
+          for arg, success in [
+            ('hi=2 p122=1 mali_gov=1',False),
+            ('hi=2 panel=0 p122=1 mali_gov=1',False),
+            ('hi=2 panel_sleep=1 p122=1 mali_gov=1',False),
+            ('hi=2 panel=1 p122=1 mali_gov=1',True),
+          ]:
+            p=subprocess.run(['bash','-eu','-c',panel_fragment],
+              env={**os.environ,'BOOT_ARGS':arg,'KERNEL_REF':'s9/p12-thermal-deep-idle'},capture_output=True,text=True)
+            assert (p.returncode==0)==success, (arg,p.returncode,p.stdout,p.stderr)
+          # Original P12 GPU boot gate: absent/0=warning,1=enabled, bad=fail.
           fragment='p12_gpu_seen=0'+workflow.split('p12_gpu_seen=0',1)[1].split('p122_seen=0',1)[0]
           for arg, success, marker in [
             ('hi=2',True,'NOT enabled'),
