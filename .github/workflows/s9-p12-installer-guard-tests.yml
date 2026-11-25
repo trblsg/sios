@@ -94,7 +94,39 @@ jobs:
           # Exercise exact shell guards without fetching any device firmware.
           # panel=1 enables the PANEL DRIVER; panel_sleep=1 is forbidden
           # separately because the real P9 hardware wake corrupted the image.
-          import os, subprocess
+          import os, subprocess, tempfile, textwrap
+          # Execute the real Sources preflight, not just a checklist of strings.
+          # The kernel was cloned above; no installer download or device access.
+          raw=workflow.split('# P10 MUST run with hi=2',1)[1].split('git clone -q --filter=blob:none https://github.com/Scion-Project/scion-installer.git',1)[0]
+          preflight=textwrap.dedent('          # P10 MUST run with hi=2'+raw)
+          with tempfile.TemporaryDirectory() as tmp:
+            w=Path(tmp)
+            (w/'k').symlink_to('/tmp/s9-p12-source',target_is_directory=True)
+            (w/'bin').mkdir()
+            env={**os.environ,'W':tmp,'KERNEL_REF':'s9/p12-4-guarded-thermal',
+                 'BOOT_ARGS':'hi=2 panel=1 p122=1 p12_gpu_boot_auto=1 mali_gov=1 mali_gov_frame=450 mali_probe=1 p3power=1'}
+            p=subprocess.run(['bash','-eu','-o','pipefail','-c',preflight],env=env,capture_output=True,text=True)
+            print(p.stdout+p.stderr)
+            assert p.returncode==0, (p.returncode,p.stdout,p.stderr)
+            assert 'S9 P12.4 paired preflight PASS' in p.stdout
+            # Exercise the actual rearm guard with positive and negative cases.
+            lines=preflight.splitlines()
+            start=next(i for i,line in enumerate(lines) if "grep -Fq -e 'if(command==252)" in line)
+            guard='\n'.join(lines[start:start+3])
+            target=w/'fixture/k/userland/src/s9_home_idle.inc'
+            target.parent.mkdir(parents=True)
+            env['W']=str(w/'fixture')
+            for handler,ok in [
+              ('if(command==252){hi_auto_rearm();return;}',True),
+              ('if(command==252){__atomic_store_n(&hi_p124_until,0,__ATOMIC_RELEASE);hi_auto_rearm();return;}',True),
+              ('if(command==252){__atomic_store_n(&hi_p124_until,0,__ATOMIC_RELEASE);return;}',False),
+              ('if(command==253){hi_auto_rearm();return;}',False),
+              ('',False),
+            ]:
+              target.write_text(handler+'\n')
+              p=subprocess.run(['bash','-eu','-c',guard],env=env,capture_output=True,text=True)
+              assert (p.returncode==0)==ok, (handler,p.returncode,p.stdout,p.stderr)
+            print('Full Sources preflight + verified 252 positive/negative cases PASS')
           panel_fragment='case "$KERNEL_REF" in'+workflow.split('case "$KERNEL_REF" in',1)[1].split('ARGS="$BOOT_ARGS"',1)[0]
           for arg, success in [
             ('hi=2 p122=1 mali_gov=1',False),

@@ -172,7 +172,11 @@ jobs:
                 { echo "::error::kernel_ref lacks the USB kernel CTLFLAG_KERN fix (hi_cmd would return EPERM)"; exit 1; }
               grep -Fq 'hi_auto_tick();' "$W/k/userland/src/s9_home_idle.inc" ||
                 { echo "::error::hi=2 autonomous source-cut control was not integrated"; exit 1; }
-              grep -Fq 'if(command==252){hi_auto_rearm();return;}' "$W/k/userland/src/s9_home_idle.inc" ||
+              # Accept the legacy handler or P12.4's explicit Clock lease cancellation
+              # before rearm. Both must still call hi_auto_rearm() and return.
+              grep -Fq -e 'if(command==252){hi_auto_rearm();return;}' \
+                        -e 'if(command==252){__atomic_store_n(&hi_p124_until,0,__ATOMIC_RELEASE);hi_auto_rearm();return;}' \
+                        "$W/k/userland/src/s9_home_idle.inc" ||
                 { echo "::error::hi=2 USB serial script requires verified 252 rearm (late COM attachment)"; exit 1; }
               grep -Fq 'if(command==300){hi_open_settings(false);return;}' "$W/k/userland/src/s9_home_idle.inc" ||
                 { echo "::error::hi=2 USB serial script requires 300 Settings URL route"; exit 1; }
