@@ -761,6 +761,8 @@ jobs:
             d=${pair%%=*}
             make ${d}_defconfig > /dev/null
             rm -f hakios-kernel
+            export P125_EXPORT_PREFLIGHT=0
+            if [ -f xnu/p125-timer-observer.py ]; then P125_EXPORT_PREFLIGHT=1; fi
             make kernel JOBS="$(nproc)" > "$W/kernel-$d.log" 2>&1 || {
               # -j keeps compiling after one file fails, so the diagnostic can be hundreds of lines above the end: say it
               # here, where the step's annotation can be read, as well as the end of the log for the make summary.
@@ -772,6 +774,7 @@ jobs:
             }
             cp hakios-kernel "$W/kernels/kernel-$d"
             if [ -f xnu/p125-timer-observer.py ]; then
+              grep -Fq 'P12.5 actual XNU EXPORT_HDRS preflight PASS' "$W/kernel-$d.log" || { echo '::error::P12.5 actual header-export check not executed'; exit 1; }
               mkdir -p "$W/p125-symbols"
               map="$W/p125-symbols/p125-symbols-$d.txt"
               llvm-nm -n --defined-only hakios-kernel | awk '$2 ~ /^[Tt]$/ {print}' > "$map"
