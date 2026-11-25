@@ -570,6 +570,15 @@ jobs:
                       { echo '::error::P12.4.1 warm-suite/timer pairing missing'; exit 1; }
                     python3 "$W/k/tools/tests/test_p1241_timer_observer.py"
                     echo 'S9 P12.4.1 paired preflight PASS: warm quiet suite and read-only timer service'
+                    for src in xnu/p125-timer-observer.py xnu/files/hakios_p125.h xnu/files/hakios_p125_impl.h drivers/power/exynos/hakios.p125_sysctl.h tools/s9-p125-timer-serial.ps1 tools/tests/test_p125_timer_observer.py; do
+                      test -s "$W/k/$src" || { echo "::error::P12.5 source missing: $src"; exit 1; }
+                    done
+                    grep -Fq 'p125-timer-observer.py' "$W/k/xnu/fork.sh" &&
+                    grep -Fq 'hakios.p125_sysctl.h' "$W/k/drivers/power/exynos/hakios.exynos_cpufreq.c" &&
+                    grep -Fq 'hakios_p125_usb_event' "$W/k/drivers/usb/hakios.dwc3.c" ||
+                      { echo '::error::P12.5 timer/USB pairing missing'; exit 1; }
+                    python3 "$W/k/tools/tests/test_p125_timer_observer.py"
+                    echo 'S9 P12.5 paired preflight PASS: callback attribution and offline capture'
                     echo 'S9 P12.4 paired preflight PASS: bounded CPU/Clock/hash, IRQ observer, UFS guard, touch revoke, no delayed benchmark'
                     ;;
                 esac
@@ -762,6 +771,23 @@ jobs:
               exit 1
             }
             cp hakios-kernel "$W/kernels/kernel-$d"
+            if [ -f xnu/p125-timer-observer.py ]; then
+              mkdir -p "$W/p125-symbols"
+              map="$W/p125-symbols/p125-symbols-$d.txt"
+              llvm-nm -n --defined-only hakios-kernel | awk '$2 ~ /^[Tt]$/ {print}' > "$map"
+              if ! grep -Eq '[[:space:]]_?thread_timer_expire$' "$map" || ! grep -Eq '[[:space:]]_?mk_timer_expire$' "$map"; then
+                src=$(OS_PROFILE_QUIET=1 python3 tools/os-profile.py get src)
+                machine=$(OS_PROFILE_QUIET=1 python3 tools/os-profile.py get machine)
+                unstripped="$src/BUILD/obj/DEVELOPMENT_ARM64_$machine/mach.development.$(echo "$machine" | tr '[:upper:]' '[:lower:]').unstripped"
+                if [ -f "$unstripped" ]; then
+                  llvm-nm -n --defined-only "$unstripped" | awk '$2 ~ /^[Tt]$/ {print}' > "$map"
+                fi
+              fi
+              grep -Eq '[[:space:]]_?hakios_p125_active$' "$map" || { echo '::error::P12.5 symbol anchor missing'; exit 1; }
+              grep -Eq '[[:space:]]_?thread_timer_expire$' "$map" || { echo '::error::P12.5 wait symbol missing'; exit 1; }
+              grep -Eq '[[:space:]]_?mk_timer_expire$' "$map" || { echo '::error::P12.5 Mach timer symbol missing'; exit 1; }
+              { git rev-parse HEAD; sha256sum hakios-kernel; } > "$W/p125-symbols/p125-build-$d.txt"
+            fi
             grep -a 'drivers built in' "$W/kernel-$d.log" | tail -1 || true
           done
           [ -f "$W/kernels/kernel-starlte" ] || { echo "::error::userdata_blocks must include starlte=BLOCKS for this S9 workflow"; exit 1; }
@@ -948,6 +974,14 @@ jobs:
           path: /mnt/w/upload/scion-exynos9810-installer-format-userdata.7z
           compression-level: 0
           retention-days: 3
+
+      - name: P12.5 matched kernel text symbols
+        uses: actions/upload-artifact@v4
+        with:
+          name: s9-p125-symbols
+          path: /mnt/w/p125-symbols
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Build logs (no Apple files in them)
         if: failure()
