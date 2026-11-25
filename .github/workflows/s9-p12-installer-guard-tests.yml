@@ -60,6 +60,7 @@ jobs:
           node /tmp/s9-p12-source/tools/tests/test-p125-symbol-map.js
           node /tmp/s9-p12-source/tools/tests/test-p126-contract.js
           node /tmp/s9-p12-source/tools/tests/test-p127-contract.js
+          node /tmp/s9-p12-source/tools/tests/test-p1272-gpu-cache.js --compile
           python3 /tmp/s9-p12-source/tools/tests/test_p127_jiffies_header.py
           cc -std=c11 -O2 -Wall -Wextra -Werror /tmp/s9-p12-source/tools/tests/test_s9_p122_rootcause.c -o /tmp/test-s9-p122
           /tmp/test-s9-p122
@@ -119,6 +120,7 @@ jobs:
             assert 'S9 P12.5 paired preflight PASS' in p.stdout
             assert 'S9 P12.6 paired preflight PASS' in p.stdout
             assert 'S9 P12.7 paired preflight PASS' in p.stdout
+            assert 'S9 P12.7.2 paired preflight PASS' in p.stdout
             # Exercise the actual rearm guard with positive and negative cases.
             lines=preflight.splitlines()
             start=next(i for i,line in enumerate(lines) if "grep -Fq -e 'if(command==252)" in line)
