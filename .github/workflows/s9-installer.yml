@@ -587,6 +587,14 @@ jobs:
                       node "$W/k/tools/tests/test-p126-contract.js"
                       echo 'S9 P12.6 paired preflight PASS: bounded driver idle and matched GNSS/HAL ABI'
                     fi
+                    if [ -s "$W/k/docs/s9-p127-energy.md" ]; then
+                      for src in tools/p127-jiffies-header.py tools/tests/test_p127_jiffies_header.py tools/tests/test-p127-contract.js tools/tests/test-s9-p127-energy-trials.ps1; do
+                        test -s "$W/k/$src" || { echo "::error::P12.7 paired source missing: $src"; exit 1; }
+                      done
+                      node "$W/k/tools/tests/test-p127-contract.js"
+                      python3 "$W/k/tools/tests/test_p127_jiffies_header.py"
+                      echo 'S9 P12.7 paired preflight PASS: bounded driver trials, energy ABI and exact jiffies overlay'
+                    fi
                     echo 'S9 P12.4 paired preflight PASS: bounded CPU/Clock/hash, IRQ observer, UFS guard, touch revoke, no delayed benchmark'
                     ;;
                 esac
