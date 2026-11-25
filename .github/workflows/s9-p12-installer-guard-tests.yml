@@ -114,7 +114,7 @@ jobs:
             # Exercise the actual rearm guard with positive and negative cases.
             lines=preflight.splitlines()
             start=next(i for i,line in enumerate(lines) if "grep -Fq -e 'if(command==252)" in line)
-            guard='\n'.join(lines[start:start+3])
+            guard='\n'.join(lines[start:start+4]) # include the error block after ||
             target=w/'fixture/k/userland/src/s9_home_idle.inc'
             target.parent.mkdir(parents=True)
             env['W']=str(w/'fixture')
