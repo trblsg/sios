@@ -562,6 +562,14 @@ jobs:
                       echo '::error::P12.4 delayed benchmark still enabled'; exit 1
                     fi
                     python3 "$W/k/tools/tests/test_p124_gic_observer.py"
+                    grep -Fq 'guard_revision=2' "$W/k/drivers/power/exynos/hakios.exynos_cpufreq.c" &&
+                    grep -Fq 's9_p1241_rise_ok' "$W/k/drivers/power/exynos/hakios.exynos_cpufreq.c" &&
+                    grep -Fq 'P1241-QuietSuite' "$W/k/tools/s9-p122-rootcause-serial.ps1" &&
+                    grep -Fq 'p1241-timer-observer.py' "$W/k/xnu/fork.sh" &&
+                    grep -Fq 'hakios_p1241_timer_observe' "$W/k/xnu/files/cpu.c" ||
+                      { echo '::error::P12.4.1 warm-suite/timer pairing missing'; exit 1; }
+                    python3 "$W/k/tools/tests/test_p1241_timer_observer.py"
+                    echo 'S9 P12.4.1 paired preflight PASS: warm quiet suite and read-only timer service'
                     echo 'S9 P12.4 paired preflight PASS: bounded CPU/Clock/hash, IRQ observer, UFS guard, touch revoke, no delayed benchmark'
                     ;;
                 esac

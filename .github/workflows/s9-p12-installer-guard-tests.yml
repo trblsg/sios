@@ -55,6 +55,7 @@ jobs:
           grep -Fq 'p124-clock: armed=1' /tmp/s9-p12-source/userland/src/s9_home_idle.inc
           grep -Fq 'p124-hash:' /tmp/s9-p12-source/userland/src/eagl.c
           python3 /tmp/s9-p12-source/tools/tests/test_p124_gic_observer.py
+          python3 /tmp/s9-p12-source/tools/tests/test_p1241_timer_observer.py
           cc -std=c11 -O2 -Wall -Wextra -Werror /tmp/s9-p12-source/tools/tests/test_s9_p122_rootcause.c -o /tmp/test-s9-p122
           /tmp/test-s9-p122
           cc -std=c11 -O2 -Wall -Wextra -Werror /tmp/s9-p12-source/tools/tests/test_s9_p12_thermal_policy.c -o /tmp/test-s9-p12
@@ -109,6 +110,7 @@ jobs:
             print(p.stdout+p.stderr)
             assert p.returncode==0, (p.returncode,p.stdout,p.stderr)
             assert 'S9 P12.4 paired preflight PASS' in p.stdout
+            assert 'S9 P12.4.1 paired preflight PASS' in p.stdout
             # Exercise the actual rearm guard with positive and negative cases.
             lines=preflight.splitlines()
             start=next(i for i,line in enumerate(lines) if "grep -Fq -e 'if(command==252)" in line)
