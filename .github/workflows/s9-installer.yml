@@ -580,6 +580,13 @@ jobs:
                     python3 "$W/k/tools/tests/test_p125_timer_observer.py"
                     node "$W/k/tools/tests/test-p125-symbol-map.js"
                     echo 'S9 P12.5 paired preflight PASS: callback attribution and offline capture'
+                    if [ -s "$W/k/docs/s9-p126-driver-idle.md" ]; then
+                      for src in tools/tests/test-p126-contract.js tools/tests/test-s9-p126-driver-trials.ps1 userland/src/gnss_chip.c userland/src/audio_plugin.c drivers/power/max77705/hakios.max77705.c drivers/input/ssp/hakios.ssp.c wifi/lx/src/lx_base.c; do
+                        test -s "$W/k/$src" || { echo "::error::P12.6 paired source missing: $src"; exit 1; }
+                      done
+                      node "$W/k/tools/tests/test-p126-contract.js"
+                      echo 'S9 P12.6 paired preflight PASS: bounded driver idle and matched GNSS/HAL ABI'
+                    fi
                     echo 'S9 P12.4 paired preflight PASS: bounded CPU/Clock/hash, IRQ observer, UFS guard, touch revoke, no delayed benchmark'
                     ;;
                 esac
