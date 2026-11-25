@@ -57,6 +57,7 @@ jobs:
           python3 /tmp/s9-p12-source/tools/tests/test_p124_gic_observer.py
           python3 /tmp/s9-p12-source/tools/tests/test_p1241_timer_observer.py
           python3 /tmp/s9-p12-source/tools/tests/test_p125_timer_observer.py
+          node /tmp/s9-p12-source/tools/tests/test-p125-symbol-map.js
           cc -std=c11 -O2 -Wall -Wextra -Werror /tmp/s9-p12-source/tools/tests/test_s9_p122_rootcause.c -o /tmp/test-s9-p122
           /tmp/test-s9-p122
           cc -std=c11 -O2 -Wall -Wextra -Werror /tmp/s9-p12-source/tools/tests/test_s9_p12_thermal_policy.c -o /tmp/test-s9-p12

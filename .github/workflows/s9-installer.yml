@@ -578,6 +578,7 @@ jobs:
                     grep -Fq 'hakios_p125_usb_event' "$W/k/drivers/usb/hakios.dwc3.c" ||
                       { echo '::error::P12.5 timer/USB pairing missing'; exit 1; }
                     python3 "$W/k/tools/tests/test_p125_timer_observer.py"
+                    node "$W/k/tools/tests/test-p125-symbol-map.js"
                     echo 'S9 P12.5 paired preflight PASS: callback attribution and offline capture'
                     echo 'S9 P12.4 paired preflight PASS: bounded CPU/Clock/hash, IRQ observer, UFS guard, touch revoke, no delayed benchmark'
                     ;;
@@ -777,18 +778,20 @@ jobs:
               grep -Fq 'P12.5 actual XNU EXPORT_HDRS preflight PASS' "$W/kernel-$d.log" || { echo '::error::P12.5 actual header-export check not executed'; exit 1; }
               mkdir -p "$W/p125-symbols"
               map="$W/p125-symbols/p125-symbols-$d.txt"
-              llvm-nm -n --defined-only hakios-kernel | awk '$2 ~ /^[Tt]$/ {print}' > "$map"
-              if ! grep -Eq '[[:space:]]_?thread_timer_expire$' "$map" || ! grep -Eq '[[:space:]]_?mk_timer_expire$' "$map"; then
-                src=$(OS_PROFILE_QUIET=1 python3 tools/os-profile.py get src)
-                machine=$(OS_PROFILE_QUIET=1 python3 tools/os-profile.py get machine)
-                unstripped="$src/BUILD/obj/DEVELOPMENT_ARM64_$machine/mach.development.$(echo "$machine" | tr '[:upper:]' '[:lower:]').unstripped"
-                if [ -f "$unstripped" ]; then
-                  llvm-nm -n --defined-only "$unstripped" | awk '$2 ~ /^[Tt]$/ {print}' > "$map"
-                fi
+              src=$(OS_PROFILE_QUIET=1 python3 tools/os-profile.py get src)
+              machine=$(OS_PROFILE_QUIET=1 python3 tools/os-profile.py get machine)
+              unstripped="$src/BUILD/obj/DEVELOPMENT_ARM64_$machine/mach.development.$(echo "$machine" | tr '[:upper:]' '[:lower:]').unstripped"
+              # XNU links __TEXT_EXEC,__text; nm's generic T/t classification
+              # is not a reliable section test. Prefer the exact unstripped
+              # image, validate UUID and executable section bytes/addresses.
+              if [ ! -s "$unstripped" ]; then
+                echo "::warning::P12.5 unstripped image not found at $unstripped; checking linked installer kernel directly"
+                unstripped=-
               fi
-              grep -Eq '[[:space:]]_?hakios_p125_active$' "$map" || { echo '::error::P12.5 symbol anchor missing'; exit 1; }
-              grep -Eq '[[:space:]]_?thread_timer_expire$' "$map" || { echo '::error::P12.5 wait symbol missing'; exit 1; }
-              grep -Eq '[[:space:]]_?mk_timer_expire$' "$map" || { echo '::error::P12.5 Mach timer symbol missing'; exit 1; }
+              node tools/p125-symbol-map.js "$W/kernels/kernel-$d" "$unstripped" "$map" || {
+                echo '::error::P12.5 executable symbol map verification failed; see diagnostic above'
+                exit 1
+              }
               { git rev-parse HEAD; sha256sum hakios-kernel; } > "$W/p125-symbols/p125-build-$d.txt"
             fi
             grep -a 'drivers built in' "$W/kernel-$d.log" | tail -1 || true
