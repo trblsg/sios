@@ -75,4 +75,12 @@ check(guard,late+' p1275=1 p12752=1',ref,metal,false,'P12.7.5.2 requires p12751=
 for(const bad of ['p12752_profile=4','p12752_idle_mode=2','bus_max=1','fb_psr=300'])
     check(guard,p52+' '+bad,ref,metal,false,bad.startsWith('p12752_')?'forbids boot-time control':'independent idle baseline forbids');
 check(guard,p52,ref,metal,false,'paired source missing');
-console.log('P1273/P1274/P12751/P12752 installer real shell negative/budget tests:',tests,'PASS (no native compiler or device test)');
+const p53=p52+' p12753=1';
+check(budget,p53,ref,metal,true,' / 280 bytes');
+check(guard,p51+' p12753=1',ref,metal,false,'P12.7.5.3 requires p12752=1');
+check(guard,p52+' p12753=0',ref,metal,false,'P12.7.5.3 accepts only exact');
+check(guard,p53+' p12753=1',ref,metal,false,'duplicate p12753=1');
+check(guard,p53+' p12753_arm=1',ref,metal,false,'forbids boot-time control');
+check(guard,p53+' bus_max=1',ref,metal,false,'independent idle baseline forbids');
+check(guard,p53,ref,metal,false,'paired source missing');
+console.log('P1273/P1274/P12751/P12752/P12753 installer real shell negative/budget tests:',tests,'PASS (no native compiler or device test)');

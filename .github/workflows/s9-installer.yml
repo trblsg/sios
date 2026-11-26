@@ -622,8 +622,11 @@ jobs:
           p1275_seen=0
           p12751_seen=0
           p12752_seen=0
+          p12753_seen=0
           for token in $BOOT_ARGS; do
             case "$token" in
+              p12753=1) p12753_seen=$((p12753_seen+1)) ;;
+              p12753=*|p12753_*=*) echo "::error::P12.7.5.3 accepts only exact p12753=1; forbids boot-time control $token"; exit 1 ;;
               p12752=1) p12752_seen=$((p12752_seen+1)) ;;
               p12752=*|p12752_*=*) echo "::error::P12.7.5.2 accepts only exact p12752=1; forbids boot-time control $token"; exit 1 ;;
               p12751=1) p12751_seen=$((p12751_seen+1)) ;;
@@ -640,6 +643,10 @@ jobs:
           [ "$p1275_seen" -le 1 ] || { echo '::error::duplicate p1275=1'; exit 1; }
           [ "$p12751_seen" -le 1 ] || { echo '::error::duplicate p12751=1'; exit 1; }
           [ "$p12752_seen" -le 1 ] || { echo '::error::duplicate p12752=1'; exit 1; }
+          [ "$p12753_seen" -le 1 ] || { echo '::error::duplicate p12753=1'; exit 1; }
+          if [ "$p12753_seen" -eq 1 ]; then
+            [ "$p12752_seen" -eq 1 ] || { echo '::error::P12.7.5.3 requires p12752=1'; exit 1; }
+          fi
           if [ "$p12752_seen" -eq 1 ]; then
             [ "$p12751_seen" -eq 1 ] || { echo '::error::P12.7.5.2 requires p12751=1'; exit 1; }
             for token in $BOOT_ARGS; do
@@ -751,6 +758,13 @@ jobs:
             node "$W/k/tools/tests/test-p12752-contract.js"
             echo 'S9 P12.7.5.2 paired source preflight PASS (not hardware qualification)'
           fi
+          if [ "$p12753_seen" -eq 1 ]; then
+            for src in drivers/power/exynos/hakios.p12753.h tools/tests/test-p12753-contract.js tools/tests/test-s9-p12753-serial.ps1 docs/s9-p12753-implementation-status.md; do
+              test -s "$W/k/$src" || { echo "::error::P12.7.5.3 paired source missing: $src"; exit 1; }
+            done
+            node "$W/k/tools/tests/test-p12753-contract.js"
+            echo 'S9 P12.7.5.3 paired source preflight PASS (not hardware qualification)'
+          fi
           git clone -q --filter=blob:none https://github.com/Scion-Project/scion-installer.git "$W/pkg"
           git -C "$W/pkg" checkout -q "$PACKAGING_REF"
           # this run's own commit of the device repository, where tools/hakios-device.py sync would put it
@@ -786,6 +800,7 @@ jobs:
           echo "panvk=$(cd "$W/k" && { cat tools/mk-panvk.sh tools/vk/vk_smoke.c tools/mesa/*.patch tools/mesa/panvk/*.patch tools/mesa/hakios-drm/*; if [ "$p12751_seen" -eq 1 ]; then cat tools/p12751-panvk-null.js tools/p1275-macho-audit.js; echo dual-p12751; fi; } | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
           echo "p12751=$p12751_seen" >> "$GITHUB_OUTPUT"
           echo "p12752=$p12752_seen" >> "$GITHUB_OUTPUT"
+          echo "p12753=$p12753_seen" >> "$GITHUB_OUTPUT"
           echo "m2v=$(cd "$W/k/userland" && cat ../tools/metal/mk-metal2vulkan.sh ../tools/metal/bridge/* ../tools/metal/*.metal ../tools/metal/m2v_test.c ../tools/metal/m2v/*.patch 2>/dev/null | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
 
       - name: Cache the theos toolchain and SDK
@@ -847,6 +862,13 @@ jobs:
               echo '::error::P12.7.5.2 XNU staged header missing or different'; exit 1;
             }
             echo 'P12752 staged XNU header verified'
+          fi
+          if [ "${{ steps.sources.outputs.p12753 }}" = 1 ]; then
+            XNU_TREE="$(OS_PROFILE_QUIET=1 python3 tools/os-profile.py get src)"
+            cmp drivers/power/exynos/hakios.p12753.h "$XNU_TREE/bsd/dev/hakios.p12753.h" || {
+              echo '::error::P12.7.5.3 XNU staged header missing or different'; exit 1;
+            }
+            echo 'P12753 staged XNU header verified'
           fi
           xnu-deps/setup.sh || { for f in xnu-deps/*.log; do echo "== $f"; tail -60 "$f"; done; exit 1; }
 
