@@ -53,4 +53,10 @@ check(guard,late+' p12741_profile=6',ref,metal,false,'matched cold-boot baseline
 check(guard,late+' p12741_guard=0',ref,metal,false,'matched cold-boot baseline forbids p12741_guard=0');
 check(guard,late+' p12741_user_state=3',ref,metal,false,'matched cold-boot baseline forbids p12741_user_state=3');
 check(guard,late,ref,metal,false,'paired source missing');
+check(guard,'p1275=1',ref,metal,false,'P12.7.5 requires p1274=1');
+check(guard,late+' p1275=0',ref,metal,false,'P12.7.5 accepts only exact');
+check(guard,late+' p1275=1 p1275=1',ref,metal,false,'duplicate p1275=1');
+check(guard,late+' p1275=1 p1275_profile=4',ref,metal,false,'P12.7.5 forbids boot-time mode');
+check(budget,late+' p1275=1',ref,metal,true,' / 280 bytes');
+check(guard,late+' p1275=1',ref,metal,false,'paired source missing');
 console.log('P1273/P1274 installer real shell negative/budget tests:',tests,'PASS (no native compiler or device test)');

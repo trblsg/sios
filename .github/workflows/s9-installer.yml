@@ -619,13 +619,21 @@ jobs:
           # P12.7.3 is a diagnostic opt-in, never a boot-time
           # CPU cap, lower floor, Metal layout or stacked policy.
           p1274_seen=0
+          p1275_seen=0
           for token in $BOOT_ARGS; do
             case "$token" in
+              p1275=1) p1275_seen=$((p1275_seen+1)) ;;
+              p1275=*) echo '::error::P12.7.5 accepts only exact p1275=1 or absence'; exit 1 ;;
+              p1275_profile=*|p1275_mode=*|p1275_selected=*|p1275_focus=*|p1275_load_state=*) echo "::error::P12.7.5 forbids boot-time mode $token"; exit 1 ;;
               p1274=1) p1274_seen=$((p1274_seen+1)) ;;
               p1274=*) echo '::error::P12.7.4 accepts only exact p1274=1 or absence'; exit 1 ;;
             esac
           done
           [ "$p1274_seen" -le 1 ] || { echo '::error::duplicate p1274=1'; exit 1; }
+          [ "$p1275_seen" -le 1 ] || { echo '::error::duplicate p1275=1'; exit 1; }
+          if [ "$p1275_seen" -eq 1 ] && [ "$p1274_seen" -ne 1 ]; then
+            echo '::error::P12.7.5 requires p1274=1'; exit 1
+          fi
           if [ "$p1274_seen" -eq 1 ]; then
             case " $BOOT_ARGS " in
               *" p1273=1 "*) ;;
@@ -693,6 +701,15 @@ jobs:
             cc -std=gnu11 -O2 -Wall -Wextra -Werror -I"$W/k/tools/tests/p12741_stubs" "$W/k/tools/tests/test_s9_p12741_user.c" -o "$W/bin/s9-p12741-user"
             "$W/bin/s9-p12741-user"
             echo 'S9 P12.7.4.1 paired source and portable user header preflight PASS (not native iOS/hardware qualification)'
+          fi
+          if [ "$p1275_seen" -eq 1 ]; then
+            for src in tools/p1275-macho-audit.js tools/tests/test-p1275-macho.js tools/tests/test-p1275-contract.js docs/s9-p1275-implementation-status.md; do
+              test -s "$W/k/$src" || { echo "::error::P12.7.5 paired source missing: $src"; exit 1; }
+            done
+            grep -Fq 'p1275_revision=1;' "$W/k/drivers/power/exynos/hakios.p1274_lab.h"
+            node "$W/k/tools/tests/test-p1275-contract.js"
+            node "$W/k/tools/tests/test-p1275-macho.js"
+            echo 'S9 P12.7.5 paired source and Mach-O synthetic preflight PASS (not hardware qualification)'
           fi
           git clone -q --filter=blob:none https://github.com/Scion-Project/scion-installer.git "$W/pkg"
           git -C "$W/pkg" checkout -q "$PACKAGING_REF"
@@ -832,6 +849,32 @@ jobs:
           test -f "$P/libvulkan_panfrost.dylib" && test -x "$P/vk_smoke"
           test -f "$V/libmetal2vulkan.dylib"
           ls -la "$P/libvulkan_panfrost.dylib" "$P/vk_smoke" "$V/libmetal2vulkan.dylib"
+
+      - name: P12.7.5 audit exact cached PanVK before packaging
+        if: inputs.metal && contains(inputs.boot_args, 'p1275=1')
+        working-directory: /mnt/w/k
+        run: |
+          P=xnu-deps/build/panvk/out
+          R="$W/p1275-macho"
+          mkdir -p "$R"
+          node tools/p1275-macho-audit.js "$P/libvulkan_panfrost.dylib" "$R/panvk-audit.json"
+          cp "$P/libvulkan_panfrost.dylib" "$R/libvulkan_panfrost.dylib"
+          for f in exported.txt weak-entrypoints.txt built-from missing.txt; do
+            if [ -f "$P/$f" ]; then cp "$P/$f" "$R/$f"; fi
+          done
+          git rev-parse HEAD > "$R/kernel-commit.txt"
+          sha256sum "$P/libvulkan_panfrost.dylib" > "$R/input-sha256.txt"
+          if command -v llvm-objdump >/dev/null; then
+            llvm-objdump --macho --bind --rebase --lazy-bind --weak-bind --exports-trie "$P/libvulkan_panfrost.dylib" > "$R/llvm-bind.txt" 2>&1 || echo 'llvm-objdump bind options unavailable' >> "$R/llvm-bind.txt"
+            llvm-objdump --macho --chained-fixups "$P/libvulkan_panfrost.dylib" > "$R/llvm-chained.txt" 2>&1 || echo 'llvm-objdump chained-fixups unavailable' >> "$R/llvm-chained.txt"
+          fi
+      - name: Upload P12.7.5 PanVK audit and exact build input
+        if: inputs.metal && contains(inputs.boot_args, 'p1275=1')
+        uses: actions/upload-artifact@v4
+        with:
+          name: p1275-panvk-macho
+          path: /mnt/w/p1275-macho/
+          if-no-files-found: error
 
       - name: iOS 16.5 (20F66) for iPhone10,3, from Apple
         run: |
