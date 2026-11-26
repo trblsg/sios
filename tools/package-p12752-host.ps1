@@ -6,7 +6,7 @@ Set-StrictMode -Version 2
 $ErrorActionPreference='Stop'
 $root=(Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $kernel=Join-Path $root '.ioss9-p4-lab'
-$commit='7cc59a335c46ec473fc6f166572dec20304efd63'
+$commit='e951ba685333dd317bf5689276ece636264cd0aa'
 $gitCmd=Get-Command git.exe -ErrorAction SilentlyContinue
 $git=if($gitCmd){$gitCmd.Source}else{'C:\Program Files\Git\cmd\git.exe'}
 if(-not (Test-Path -LiteralPath $git)){throw 'Git for Windows not found'}
@@ -25,7 +25,7 @@ $names=$files+@('README.md')
 $hash=[ordered]@{}
 foreach($f in $names){$hash[$f]=(Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $stage $f)).Hash}
 [ordered]@{kernel_commit=$commit;files=$hash}|ConvertTo-Json -Depth 4|Set-Content -Encoding UTF8 -LiteralPath (Join-Path $stage 'SHA256SUMS.json')
-$zip=Join-Path $PSScriptRoot 'p12752-host-7cc59a3.zip'
+$zip=Join-Path $PSScriptRoot 'p12752-host-e951ba6.zip'
 Compress-Archive -LiteralPath @(($names+@('SHA256SUMS.json'))|ForEach-Object {Join-Path $stage $_}) -DestinationPath $zip -Force
 $verify=Join-Path $work 'verify'
 Expand-Archive -LiteralPath $zip -DestinationPath $verify
