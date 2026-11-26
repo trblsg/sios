@@ -49,5 +49,8 @@ const late=args.replace('p1272_probe=1 ','')+' p1274=1';
 check(budget,late,ref,metal,true,' / 280 bytes');
 check(guard,late+' tmu_poll=200',ref,metal,false,'matched cold-boot baseline forbids tmu_poll=200');
 check(guard,late+' p1274_profile=6',ref,metal,false,'matched cold-boot baseline forbids p1274_profile=6');
+check(guard,late+' p12741_profile=6',ref,metal,false,'matched cold-boot baseline forbids p12741_profile=6');
+check(guard,late+' p12741_guard=0',ref,metal,false,'matched cold-boot baseline forbids p12741_guard=0');
+check(guard,late+' p12741_user_state=3',ref,metal,false,'matched cold-boot baseline forbids p12741_user_state=3');
 check(guard,late,ref,metal,false,'paired source missing');
 console.log('P1273/P1274 installer real shell negative/budget tests:',tests,'PASS (no native compiler or device test)');

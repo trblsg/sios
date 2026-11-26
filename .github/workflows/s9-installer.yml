@@ -634,7 +634,7 @@ jobs:
             for token in $BOOT_ARGS; do
               case "$token" in
                 tmu_poll=1000|p1272_probe=0|poster_probe=0|widget_nice=0|poster_retry=2) ;;
-                tmu_poll=*|p1272_probe=*|poster_probe=*|widget_nice=*|poster_retry=*|p1274_profile=*|p1274_metal_log_mode=*|cpufreq_ocp=*|cpufreq_gov_big_oc=*)
+                tmu_poll=*|p1272_probe=*|poster_probe=*|widget_nice=*|poster_retry=*|p1274_profile=*|p12741_profile=*|p12741_guard=*|p12741_user_state=*|p1274_metal_log_mode=*|cpufreq_ocp=*|cpufreq_gov_big_oc=*)
                   echo "::error::P12.7.4 matched cold-boot baseline forbids $token"; exit 1 ;;
               esac
             done
@@ -683,13 +683,16 @@ jobs:
             echo 'S9 P12.7.3 paired source preflight PASS (not hardware qualification)'
           fi
           if [ "$p1274_seen" -eq 1 ]; then
-            for src in drivers/power/exynos/hakios.p1274_lab.h drivers/power/exynos/hakios.p1274_policy.h userland/src/p1274_user.h tools/s9-p1274-serial.ps1 tools/tests/test-p1274-contract.js tools/tests/test_s9_p1274_policy.c tools/tests/test-s9-p1274-serial.ps1 docs/s9-p1274-implementation-status.md; do
+            for src in drivers/power/exynos/hakios.p1274_lab.h drivers/power/exynos/hakios.p1274_policy.h userland/src/p1274_user.h tools/s9-p1274-serial.ps1 tools/tests/test-p1274-contract.js tools/tests/test_s9_p1274_policy.c tools/tests/test-s9-p1274-serial.ps1 tools/tests/test_s9_p12741_user.c tools/tests/p12741_stubs/sys/sysctl.h tools/tests/p12741_stubs/mach/mach_time.h docs/s9-p12741-implementation-status.md; do
               test -s "$W/k/$src" || { echo "::error::P12.7.4 paired source missing: $src"; exit 1; }
             done
             node "$W/k/tools/tests/test-p1274-contract.js"
             cc -std=c11 -O2 -Wall -Wextra -Werror "$W/k/tools/tests/test_s9_p1274_policy.c" -o "$W/bin/s9-p1274-policy"
             "$W/bin/s9-p1274-policy"
-            echo 'S9 P12.7.4 paired source preflight PASS (not hardware qualification)'
+            grep -Fq 'p12741_revision=2;' "$W/k/drivers/power/exynos/hakios.p1274_lab.h" || { echo '::error::P12.7.4.1 host ABI revision missing'; exit 1; }
+            cc -std=gnu11 -O2 -Wall -Wextra -Werror -I"$W/k/tools/tests/p12741_stubs" "$W/k/tools/tests/test_s9_p12741_user.c" -o "$W/bin/s9-p12741-user"
+            "$W/bin/s9-p12741-user"
+            echo 'S9 P12.7.4.1 paired source and portable user header preflight PASS (not native iOS/hardware qualification)'
           fi
           git clone -q --filter=blob:none https://github.com/Scion-Project/scion-installer.git "$W/pkg"
           git -C "$W/pkg" checkout -q "$PACKAGING_REF"
