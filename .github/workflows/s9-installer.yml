@@ -723,6 +723,9 @@ jobs:
             for src in drivers/power/exynos/hakios.p12751.h tools/p12751-panvk-null.js tools/tests/test-p12751-null.js tools/tests/test-p12751-contract.js docs/s9-p12751-implementation-status.md userland/src/metalvk/p12751_layout_abi.h; do
               test -s "$W/k/$src" || { echo "::error::P12.7.5.1 paired source missing: $src"; exit 1; }
             done
+            grep -Eq '^power/exynos[[:space:]]+bsd/dev/hakios\.p12751\.h[[:space:]]*$' "$W/k/drivers/map" || {
+              echo '::error::P12.7.5.1 missing drivers/map entry for bsd/dev/hakios.p12751.h; update kernel_ref'; exit 1;
+            }
             grep -Fq 'p12751_revision=1;' "$W/k/drivers/power/exynos/hakios.p12751.h"
             node "$W/k/tools/tests/test-p12751-null.js"
             node "$W/k/tools/tests/test-p12751-contract.js"
@@ -810,6 +813,13 @@ jobs:
         run: |
           make starlte_defconfig
           xnu/apply.sh
+          if [ "${{ steps.sources.outputs.p12751 }}" = 1 ]; then
+            XNU_TREE="$(OS_PROFILE_QUIET=1 python3 tools/os-profile.py get src)"
+            cmp drivers/power/exynos/hakios.p12751.h "$XNU_TREE/bsd/dev/hakios.p12751.h" || {
+              echo '::error::P12.7.5.1 XNU staged header missing or different'; exit 1;
+            }
+            echo 'P12751 staged XNU header verified'
+          fi
           xnu-deps/setup.sh || { for f in xnu-deps/*.log; do echo "== $f"; tail -60 "$f"; done; exit 1; }
 
       - name: Cache PanVK (Mesa's Vulkan driver for the S9's Mali-G72, built for iOS)
