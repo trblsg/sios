@@ -618,6 +618,27 @@ jobs:
           esac
           # P12.7.3 is a diagnostic opt-in, never a boot-time
           # CPU cap, lower floor, Metal layout or stacked policy.
+          p1274_seen=0
+          for token in $BOOT_ARGS; do
+            case "$token" in
+              p1274=1) p1274_seen=$((p1274_seen+1)) ;;
+              p1274=*) echo '::error::P12.7.4 accepts only exact p1274=1 or absence'; exit 1 ;;
+            esac
+          done
+          [ "$p1274_seen" -le 1 ] || { echo '::error::duplicate p1274=1'; exit 1; }
+          if [ "$p1274_seen" -eq 1 ]; then
+            case " $BOOT_ARGS " in
+              *" p1273=1 "*) ;;
+              *) echo '::error::P12.7.4 requires p1273=1'; exit 1 ;;
+            esac
+            for token in $BOOT_ARGS; do
+              case "$token" in
+                tmu_poll=1000|p1272_probe=0|poster_probe=0|widget_nice=0|poster_retry=2) ;;
+                tmu_poll=*|p1272_probe=*|poster_probe=*|widget_nice=*|poster_retry=*|p1274_profile=*|p1274_metal_log_mode=*|cpufreq_ocp=*|cpufreq_gov_big_oc=*)
+                  echo "::error::P12.7.4 matched cold-boot baseline forbids $token"; exit 1 ;;
+              esac
+            done
+          fi
           p1273_seen=0
           for token in $BOOT_ARGS; do
             case "$token" in
@@ -660,6 +681,15 @@ jobs:
             cc -std=c11 -O2 -Wall -Wextra -Werror "$W/k/tools/tests/test_s9_p1273_gate.c" -o "$W/bin/s9-p1273-gate"
             "$W/bin/s9-p1273-gate"
             echo 'S9 P12.7.3 paired source preflight PASS (not hardware qualification)'
+          fi
+          if [ "$p1274_seen" -eq 1 ]; then
+            for src in drivers/power/exynos/hakios.p1274_lab.h drivers/power/exynos/hakios.p1274_policy.h userland/src/p1274_user.h tools/s9-p1274-serial.ps1 tools/tests/test-p1274-contract.js tools/tests/test_s9_p1274_policy.c tools/tests/test-s9-p1274-serial.ps1 docs/s9-p1274-implementation-status.md; do
+              test -s "$W/k/$src" || { echo "::error::P12.7.4 paired source missing: $src"; exit 1; }
+            done
+            node "$W/k/tools/tests/test-p1274-contract.js"
+            cc -std=c11 -O2 -Wall -Wextra -Werror "$W/k/tools/tests/test_s9_p1274_policy.c" -o "$W/bin/s9-p1274-policy"
+            "$W/bin/s9-p1274-policy"
+            echo 'S9 P12.7.4 paired source preflight PASS (not hardware qualification)'
           fi
           git clone -q --filter=blob:none https://github.com/Scion-Project/scion-installer.git "$W/pkg"
           git -C "$W/pkg" checkout -q "$PACKAGING_REF"

@@ -7,7 +7,7 @@ const workflow=readFileSync('.github/workflows/s9-installer.yml','utf8').replace
 const args='hi=2 panel=1 p122=1 p12_gpu_boot_auto=1 mali_gov=1 mali_gov_frame=450 mali_probe=1 p3power=1 max77705_fg_s=10 p1272_probe=1 p1273=1';
 const ref='s9/p12-4-guarded-thermal';
 const bash=process.env.BASH_PATH||'bash';
-const start=workflow.indexOf('          p1273_seen=0');
+const start=workflow.indexOf('          p1274_seen=0');
 const stop=workflow.indexOf('          git clone -q --filter=blob:none https://github.com/Scion-Project/scion-installer.git',start);
 assert(start>=0&&stop>start);
 const guard=workflow.slice(start,stop);
@@ -41,4 +41,13 @@ check(guard,args+' p122=1',ref,metal,false,'exactly one p122=1');
 for(const bad of ['metal_layout=1','gov_policy=3','fb_psr=100','cpufreq_gov_big_max=1469000','metal=0','camtl=1','bt=0','wifi_pcie=0','brcmfmac_poll=0'])
     check(guard,args+' '+bad,ref,metal,false,'forbids enabling or overriding '+bad);
 check(guard,args,ref,metal,false,'paired source missing');
-console.log('P1273 installer real shell negative/budget tests:',tests,'PASS (no native compiler or device test)');
+check(guard,'p1274=1',ref,metal,false,'P12.7.4 requires p1273=1');
+check(guard,args+' p1274=2',ref,metal,false,'P12.7.4 accepts only exact');
+check(guard,args+' p1274=1 p1274=1',ref,metal,false,'duplicate p1274=1');
+check(guard,args+' p1274=1',ref,metal,false,'matched cold-boot baseline forbids p1272_probe=1');
+const late=args.replace('p1272_probe=1 ','')+' p1274=1';
+check(budget,late,ref,metal,true,' / 280 bytes');
+check(guard,late+' tmu_poll=200',ref,metal,false,'matched cold-boot baseline forbids tmu_poll=200');
+check(guard,late+' p1274_profile=6',ref,metal,false,'matched cold-boot baseline forbids p1274_profile=6');
+check(guard,late,ref,metal,false,'paired source missing');
+console.log('P1273/P1274 installer real shell negative/budget tests:',tests,'PASS (no native compiler or device test)');
