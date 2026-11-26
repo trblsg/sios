@@ -98,6 +98,12 @@ jobs:
                 *) echo '::error::P12.2 requires panel=1 in boot_args to initialize S6E3HA8; keep panel_sleep=1 and p9_panel_mode=1 DISABLED'; exit 1 ;;
               esac ;;
           esac
+          case " $BOOT_ARGS " in
+            *" p1273=1 "*)
+              [ "$METAL_ARGS" = "metal=2 camtl=0" ] ||
+                { echo '::error::P12.7.3 unified lab requires metal=true'; exit 1; }
+              ;;
+          esac
           ARGS="$BOOT_ARGS"
           for arg in $FPS_ARGS $METAL_ARGS; do
             name=${arg%%=*}
@@ -610,6 +616,51 @@ jobs:
               echo "S9 hi=2 preflight: PASS; BOOT+SYSTEM+Windows automation matched at source"
               ;;
           esac
+          # P12.7.3 is a diagnostic opt-in, never a boot-time
+          # CPU cap, lower floor, Metal layout or stacked policy.
+          p1273_seen=0
+          for token in $BOOT_ARGS; do
+            case "$token" in
+              p1273=1) p1273_seen=$((p1273_seen+1)) ;;
+              p1273=*) echo '::error::P12.7.3 accepts only exact p1273=1 or absence'; exit 1 ;;
+            esac
+          done
+          if [ "$p1273_seen" -gt 1 ]; then
+            echo '::error::duplicate p1273=1'; exit 1
+          fi
+          if [ "$p1273_seen" -eq 1 ]; then
+            # The older nested P12.4 guards use branch-name matching.
+            # Never allow a SHA/other branch to bypass the complete guard set.
+            [ "$KERNEL_REF" = s9/p12-4-guarded-thermal ] ||
+              { echo '::error::P12.7.3 requires kernel_ref=s9/p12-4-guarded-thermal'; exit 1; }
+            for required in hi=2 panel=1 p122=1 p12_gpu_boot_auto=1 mali_gov=1 mali_gov_frame=450 mali_probe=1 p3power=1 max77705_fg_s=10; do
+              name=${required%%=*}
+              count=0
+              for token in $BOOT_ARGS; do
+                case "$token" in
+                  "$required") count=$((count+1)) ;;
+                  "$name="*) echo "::error::P12.7.3 requires $required"; exit 1 ;;
+                esac
+              done
+              [ "$count" -eq 1 ] || { echo "::error::P12.7.3 requires exactly one $required"; exit 1; }
+            done
+            for token in $BOOT_ARGS; do
+              case "$token" in
+                metal_layout=0|gov_policy=2|fb_psr=300|cpufreq_gov=1|tmu=3|metal=2|camtl=0) ;;
+                metal_layout=*|gov_policy=*|fb_psr=*|cpufreq_gov=*|tmu=*|cpufreq_gov_big_max=*|cpufreq_gov_lit_max=*|cpufreq_gov_big_min=*|cpufreq_gov_lit_min=*|metal=*|camtl=*|bt=0|wifi_pcie=0|brcmfmac_poll=0)
+                  echo "::error::P12.7.3 baseline forbids enabling or overriding $token"; exit 1 ;;
+              esac
+            done
+            for src in docs/s9-p1273-implementation-status.md tools/tests/test-p1273-contract.js tools/tests/test-s9-p1273-telemetry.ps1 tools/tests/test-s9-p1273-gate.ps1 tools/tests/test_s9_p1273_gate.c drivers/power/exynos/hakios.p1273_gate.h userland/src/metal_test.m userland/tests/test_s9_texture_layout.c; do
+              test -s "$W/k/$src" || { echo "::error::P12.7.3 paired source missing: $src"; exit 1; }
+            done
+            node "$W/k/tools/tests/test-p1273-contract.js"
+            cc -std=c11 -O2 -Wall -Wextra -Werror "$W/k/userland/tests/test_s9_texture_layout.c" -o "$W/bin/s9-p1273-layout"
+            "$W/bin/s9-p1273-layout"
+            cc -std=c11 -O2 -Wall -Wextra -Werror "$W/k/tools/tests/test_s9_p1273_gate.c" -o "$W/bin/s9-p1273-gate"
+            "$W/bin/s9-p1273-gate"
+            echo 'S9 P12.7.3 paired source preflight PASS (not hardware qualification)'
+          fi
           git clone -q --filter=blob:none https://github.com/Scion-Project/scion-installer.git "$W/pkg"
           git -C "$W/pkg" checkout -q "$PACKAGING_REF"
           # this run's own commit of the device repository, where tools/hakios-device.py sync would put it
@@ -909,6 +960,12 @@ jobs:
           FPS_ARGS: ${{ (inputs.fps || inputs.metal) && 'fps_log=1' || '' }}
         run: |
           [ -n "$USERDATA_BLOCKS" ] || { echo "::error::userdata_blocks is empty: this workflow always makes /private/var persistent on USERDATA"; exit 1; }
+          case " $BOOT_ARGS " in
+            *" p1273=1 "*)
+              [ "$METAL_ARGS" = "metal=2 camtl=0" ] ||
+                { echo '::error::P12.7.3 unified lab requires metal=true'; exit 1; }
+              ;;
+          esac
           ARGS="$BOOT_ARGS"
           for arg in $FPS_ARGS $METAL_ARGS; do
             name=${arg%%=*}

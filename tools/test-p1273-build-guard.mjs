@@ -1,0 +1,44 @@
+// Execute the real installer shell fragments, without a firmware build.
+import {readFileSync} from 'node:fs';
+import {spawnSync} from 'node:child_process';
+import assert from 'node:assert/strict';
+import {resolve} from 'node:path';
+const workflow=readFileSync('.github/workflows/s9-installer.yml','utf8').replace(/\r/g,'');
+const args='hi=2 panel=1 p122=1 p12_gpu_boot_auto=1 mali_gov=1 mali_gov_frame=450 mali_probe=1 p3power=1 max77705_fg_s=10 p1272_probe=1 p1273=1';
+const ref='s9/p12-4-guarded-thermal';
+const bash=process.env.BASH_PATH||'bash';
+const start=workflow.indexOf('          p1273_seen=0');
+const stop=workflow.indexOf('          git clone -q --filter=blob:none https://github.com/Scion-Project/scion-installer.git',start);
+assert(start>=0&&stop>start);
+const guard=workflow.slice(start,stop);
+const first=workflow.indexOf('          case "$KERNEL_REF" in');
+const last=workflow.indexOf('      - name: Work space on /mnt',first);
+assert(first>=0&&last>first);
+const budget=workflow.slice(first,last);
+let tests=0;
+function check(fragment,boot,kernel,metal,ok,marker){
+    const r=spawnSync(bash,['-eu','-o','pipefail','-s'],{input:fragment,encoding:'utf8',
+        env:{...process.env,BOOT_ARGS:boot,KERNEL_REF:kernel,METAL_ARGS:metal,FPS_ARGS:'fps_log=1',W:resolve('tools','nonexistent-p1273-test-root').replaceAll('\\','/')}});
+    if(r.error)throw r.error;
+    const out=r.stdout+r.stderr;
+    assert.equal(r.status===0,ok,out);
+    assert(out.includes(marker),out);
+    console.log('PASS',marker||'legacy opt-out');
+    tests++;
+}
+const metal='metal=2 camtl=0';
+check(budget,args,ref,metal,true,'169 / 280 bytes');
+check(budget,args,ref,'metal=0',false,'requires metal=true');
+check(budget,args.replace('panel=1','panel=0'),ref,metal,false,'requires panel=1');
+check(budget,args+' '+('x'.repeat(200)),ref,metal,false,'boot_args too long');
+check(guard,'',ref,metal,true,'');
+check(guard,'p1273=0',ref,metal,false,'only exact');
+check(guard,args+' p1273=1',ref,metal,false,'duplicate p1273=1');
+check(guard,args,'585d65a',metal,false,'requires kernel_ref=');
+check(guard,args.replace('hi=2','hi=0'),ref,metal,false,'requires hi=2');
+check(guard,args.replace('panel=1','panel=0'),ref,metal,false,'requires panel=1');
+check(guard,args+' p122=1',ref,metal,false,'exactly one p122=1');
+for(const bad of ['metal_layout=1','gov_policy=3','fb_psr=100','cpufreq_gov_big_max=1469000','metal=0','camtl=1','bt=0','wifi_pcie=0','brcmfmac_poll=0'])
+    check(guard,args+' '+bad,ref,metal,false,'forbids enabling or overriding '+bad);
+check(guard,args,ref,metal,false,'paired source missing');
+console.log('P1273 installer real shell negative/budget tests:',tests,'PASS (no native compiler or device test)');

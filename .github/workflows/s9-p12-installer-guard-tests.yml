@@ -139,6 +139,20 @@ jobs:
               p=subprocess.run(['bash','-eu','-c',guard],env=env,capture_output=True,text=True)
               assert (p.returncode==0)==ok, (handler,p.returncode,p.stdout,p.stderr)
             print('Full Sources preflight + verified 252 positive/negative cases PASS')
+          # P12.7.3 guard: execute the exact unconditional opt-in block.
+          fragment='p1273_seen=0'+workflow.split('p1273_seen=0',1)[1].split("echo 'S9 P12.7.3 paired source preflight PASS (not hardware qualification)'",1)[0]+"echo 'S9 P12.7.3 paired source preflight PASS (not hardware qualification)'\nfi\n"
+          baseline='hi=2 panel=1 p122=1 p12_gpu_boot_auto=1 mali_gov=1 mali_gov_frame=450 mali_probe=1 p3power=1 max77705_fg_s=10 p1272_probe=1 p1273=1'
+          ref='s9/p12-4-guarded-thermal'
+          with tempfile.TemporaryDirectory() as tmp:
+            for arg,ok,marker in [('',True,''),('p1273=0',False,'only exact'),('p1273=1 p1273=1',False,'duplicate p1273=1'),(baseline,False,'paired source missing')]:
+              p=subprocess.run(['bash','-eu','-o','pipefail','-c',fragment],env={**os.environ,'BOOT_ARGS':arg,'W':tmp,'KERNEL_REF':ref},capture_output=True,text=True)
+              assert (p.returncode==0)==ok and marker in p.stdout+p.stderr, (arg,p.returncode,p.stdout,p.stderr)
+            if Path('/tmp/s9-p12-source/tools/tests/test-p1273-contract.js').is_file():
+              w=Path(tmp); (w/'k').symlink_to('/tmp/s9-p12-source',target_is_directory=True); (w/'bin').mkdir()
+              for arg,kref,ok,marker in [(baseline,ref,True,'paired source preflight PASS'),(baseline+' metal_layout=1',ref,False,'forbids enabling'),(baseline+' gov_policy=3',ref,False,'forbids enabling'),(baseline+' fb_psr=100',ref,False,'forbids enabling'),(baseline.replace('panel=1','panel=0'),ref,False,'requires panel=1'),(baseline.replace('hi=2','hi=0'),ref,False,'requires hi=2'),(baseline,'585d65a',False,'requires kernel_ref='),(baseline+' p122=1',ref,False,'exactly one p122=1')]:
+                p=subprocess.run(['bash','-eu','-o','pipefail','-c',fragment],env={**os.environ,'BOOT_ARGS':arg,'W':tmp,'KERNEL_REF':kref},capture_output=True,text=True)
+                assert (p.returncode==0)==ok and marker in p.stdout+p.stderr, (arg,kref,p.returncode,p.stdout,p.stderr)
+          print('P12.7.3 exact opt-in, paired source and clean baseline guard cases PASS')
           panel_fragment='case "$KERNEL_REF" in'+workflow.split('case "$KERNEL_REF" in',1)[1].split('ARGS="$BOOT_ARGS"',1)[0]
           for arg, success in [
             ('hi=2 p122=1 mali_gov=1',False),
@@ -183,4 +197,5 @@ jobs:
             assert (p.returncode==0)==success and marker in combined, (arg,p.returncode,combined)
           print('P12.2 opt-in and profiler clean baseline PASS; old GPU boot policy 0/absent warn, 1 arms, invalid/duplicate fail')
           PY
+          node tools/test-p1273-build-guard.mjs
           git diff --check
