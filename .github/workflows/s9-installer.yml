@@ -620,8 +620,12 @@ jobs:
           # CPU cap, lower floor, Metal layout or stacked policy.
           p1274_seen=0
           p1275_seen=0
+          p12751_seen=0
           for token in $BOOT_ARGS; do
             case "$token" in
+              p12751=1) p12751_seen=$((p12751_seen+1)) ;;
+              p12751=*) echo '::error::P12.7.5.1 accepts only exact p12751=1 or absence'; exit 1 ;;
+              p12751_*=*) echo "::error::P12.7.5.1 forbids boot-time control $token"; exit 1 ;;
               p1275=1) p1275_seen=$((p1275_seen+1)) ;;
               p1275=*) echo '::error::P12.7.5 accepts only exact p1275=1 or absence'; exit 1 ;;
               p1275_profile=*|p1275_mode=*|p1275_selected=*|p1275_focus=*|p1275_load_state=*) echo "::error::P12.7.5 forbids boot-time mode $token"; exit 1 ;;
@@ -631,6 +635,10 @@ jobs:
           done
           [ "$p1274_seen" -le 1 ] || { echo '::error::duplicate p1274=1'; exit 1; }
           [ "$p1275_seen" -le 1 ] || { echo '::error::duplicate p1275=1'; exit 1; }
+          [ "$p12751_seen" -le 1 ] || { echo '::error::duplicate p12751=1'; exit 1; }
+          if [ "$p12751_seen" -eq 1 ] && [ "$p1275_seen" -ne 1 ]; then
+            echo '::error::P12.7.5.1 requires p1275=1'; exit 1
+          fi
           if [ "$p1275_seen" -eq 1 ] && [ "$p1274_seen" -ne 1 ]; then
             echo '::error::P12.7.5 requires p1274=1'; exit 1
           fi
@@ -711,6 +719,15 @@ jobs:
             node "$W/k/tools/tests/test-p1275-macho.js"
             echo 'S9 P12.7.5 paired source and Mach-O synthetic preflight PASS (not hardware qualification)'
           fi
+          if [ "$p12751_seen" -eq 1 ]; then
+            for src in drivers/power/exynos/hakios.p12751.h tools/p12751-panvk-null.js tools/tests/test-p12751-null.js tools/tests/test-p12751-contract.js docs/s9-p12751-implementation-status.md userland/src/metalvk/p12751_layout_abi.h; do
+              test -s "$W/k/$src" || { echo "::error::P12.7.5.1 paired source missing: $src"; exit 1; }
+            done
+            grep -Fq 'p12751_revision=1;' "$W/k/drivers/power/exynos/hakios.p12751.h"
+            node "$W/k/tools/tests/test-p12751-null.js"
+            node "$W/k/tools/tests/test-p12751-contract.js"
+            echo 'S9 P12.7.5.1 paired source preflight PASS (not hardware qualification)'
+          fi
           git clone -q --filter=blob:none https://github.com/Scion-Project/scion-installer.git "$W/pkg"
           git -C "$W/pkg" checkout -q "$PACKAGING_REF"
           # this run's own commit of the device repository, where tools/hakios-device.py sync would put it
@@ -743,7 +760,8 @@ jobs:
           echo "deps=$(sha256sum "$W/k/xnu-deps/setup.sh" | cut -c1-16)" >> "$GITHUB_OUTPUT"
           # the same sources each Metal library is built of (tools/mk-panvk.sh's built-from, and the
           # built-from-tree userland/build.sh compares): a cache of the output is valid only with them
-          echo "panvk=$(cd "$W/k" && cat tools/mk-panvk.sh tools/vk/vk_smoke.c tools/mesa/*.patch tools/mesa/panvk/*.patch tools/mesa/hakios-drm/* | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+          echo "panvk=$(cd "$W/k" && { cat tools/mk-panvk.sh tools/vk/vk_smoke.c tools/mesa/*.patch tools/mesa/panvk/*.patch tools/mesa/hakios-drm/*; if [ "$p12751_seen" -eq 1 ]; then cat tools/p12751-panvk-null.js tools/p1275-macho-audit.js; echo dual-p12751; fi; } | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+          echo "p12751=$p12751_seen" >> "$GITHUB_OUTPUT"
           echo "m2v=$(cd "$W/k/userland" && cat ../tools/metal/mk-metal2vulkan.sh ../tools/metal/bridge/* ../tools/metal/*.metal ../tools/metal/m2v_test.c ../tools/metal/m2v/*.patch 2>/dev/null | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
 
       - name: Cache the theos toolchain and SDK
@@ -818,7 +836,9 @@ jobs:
           # are named. Their caches are keyed on the sources above, so a repeat run starts from the output.
           P=xnu-deps/build/panvk/out
           V=xnu-deps/build/metal2vulkan/out/ios
-          if [ ! -f "$P/libvulkan_panfrost.dylib" ] || [ ! -x "$P/vk_smoke" ]; then
+          export P12751_DUAL=${{ steps.sources.outputs.p12751 }}
+          if [ ! -f "$P/libvulkan_panfrost.dylib" ] || [ ! -x "$P/vk_smoke" ] ||
+             { [ "$P12751_DUAL" = 1 ] && { [ ! -s "$P/libvulkan_panfrost_opt.dylib" ] || [ ! -x "$P/vk_smoke_opt" ] || [ ! -s "$P/p12751-verify.json" ] || [ ! -s "$P/p12751-null-plan.json" ]; }; }; then
             echo "PanVK: Mesa 25.0.7's Vulkan driver for the Mali-G72 (tools/mk-panvk.sh)"
             tools/mk-panvk.sh > "$W/panvk.log" 2>&1 || {
               echo "::error::PanVK did not build"
@@ -830,6 +850,11 @@ jobs:
             tail -3 "$W/panvk.log"
           else
             echo "PanVK: the cache's $P/libvulkan_panfrost.dylib"
+          fi
+          if [ "$P12751_DUAL" = 1 ]; then
+            node tools/p12751-panvk-null.js verify-pack "$P/libvulkan_panfrost.dylib" "$P/libvulkan_panfrost_opt.dylib" "$P/p12751-verify.json"
+            llvm-objdump --macho --bind --lazy-bind --weak-bind "$P/libvulkan_panfrost_opt.dylib" > "$P/p12751-opt-bind.txt"
+            if grep -q 'flat-namespace' "$P/p12751-opt-bind.txt"; then echo '::error::P12751 optimized flat bind remains'; exit 1; fi
           fi
           want=$(cd userland && cat ../tools/metal/mk-metal2vulkan.sh ../tools/metal/bridge/* ../tools/metal/*.metal \
             ../tools/metal/m2v_test.c ../tools/metal/m2v/*.patch 2>/dev/null | sha256sum)
@@ -862,6 +887,13 @@ jobs:
           for f in exported.txt weak-entrypoints.txt built-from missing.txt; do
             if [ -f "$P/$f" ]; then cp "$P/$f" "$R/$f"; fi
           done
+          if [ "${{ steps.sources.outputs.p12751 }}" = 1 ]; then
+            for f in libvulkan_panfrost_opt.dylib p12751-null-plan.json p12751-verify.json p12751-opt-bind.txt; do
+              test -s "$P/$f"; cp "$P/$f" "$R/$f"
+            done
+            node tools/p1275-macho-audit.js "$P/libvulkan_panfrost_opt.dylib" "$R/panvk-opt-audit.json"
+            llvm-objdump --macho --bind --rebase --lazy-bind --weak-bind --exports-trie "$P/libvulkan_panfrost_opt.dylib" > "$R/llvm-opt-bind.txt"
+          fi
           git rev-parse HEAD > "$R/kernel-commit.txt"
           sha256sum "$P/libvulkan_panfrost.dylib" > "$R/input-sha256.txt"
           if command -v llvm-objdump >/dev/null; then
@@ -872,7 +904,7 @@ jobs:
         if: inputs.metal && contains(inputs.boot_args, 'p1275=1')
         uses: actions/upload-artifact@v4
         with:
-          name: p1275-panvk-macho
+          name: ${{ steps.sources.outputs.p12751 == '1' && 'p12751-panvk-macho' || 'p1275-panvk-macho' }}
           path: /mnt/w/p1275-macho/
           if-no-files-found: error
 
@@ -967,6 +999,7 @@ jobs:
           METAL: ${{ inputs.metal && 'vk' || '' }}
           M2V_DIR: ${{ inputs.metal && '/mnt/w/k/xnu-deps/build/metal2vulkan/out/ios' || '' }}
           PANVK_DIR: ${{ inputs.metal && '/mnt/w/k/xnu-deps/build/panvk/out' || '' }}
+          P12751_DUAL: ${{ steps.sources.outputs.p12751 }}
           METAL_ICD: ${{ inputs.metal && '/redwood/lib/libvulkan_panfrost.dylib' || '' }}
         run: |
           # Sileo and the Procursus bootstrap, pinned by tools/mk-jb.sh. Unlike scion-installer's
