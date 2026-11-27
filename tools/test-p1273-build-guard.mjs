@@ -1,5 +1,5 @@
 // Execute the real installer shell fragments, without a firmware build.
-import {readFileSync} from 'node:fs';
+import {readFileSync,mkdtempSync,mkdirSync,writeFileSync,rmSync} from 'node:fs';
 import {spawnSync} from 'node:child_process';
 import assert from 'node:assert/strict';
 import {resolve} from 'node:path';
@@ -102,4 +102,47 @@ check(guard,p54+' mfc_int_khz=107000',ref,metal,false,'forbids unqualified DVFS 
 check(guard,p54+' cpufreq_lit=455000',ref,metal,false,'forbids unqualified DVFS override');
 check(guard,p54+' bus_max=1',ref,metal,false,'independent idle baseline forbids');
 check(guard,p54,ref,metal,false,'paired source missing');
-console.log('P1273/P1274/P12751/P12752/P12753/P12754 installer real shell negative/budget tests:',tests,'PASS (no native compiler or device test)');
+const p545=p54+' p127545_qch=1 p127545_disp=1 p127545_ect=1';
+check(budget,p545,ref,metal,true,'250 / 280 bytes');
+check(guard,'p127545_qch=1 p127545_disp=1 p127545_ect=1',ref,metal,false,'P127545 requires p12754=1');
+check(guard,p54+' p127545_qch=1',ref,metal,false,'requires exactly one of each');
+check(guard,p545+' p127545_qch=1',ref,metal,false,'requires exactly one of each');
+check(guard,p545.replace('p127545_disp=1','p127545_disp=0'),ref,metal,false,'forbids boot-time control');
+check(guard,p545+' p127545_int=1',ref,metal,false,'forbids boot-time control');
+check(guard,p545+' p127545_panel=1',ref,metal,false,'forbids boot-time control');
+check(guard,p545,ref,metal,false,'paired source missing');
+assert(workflow.includes('P127545 native linked $d kernel markers verified'));
+assert(workflow.includes('P127545 native linked EFI marker verified'));
+// Execute the actual source-lock shell block with synthetic git identities.
+// Only the test-created scratch directory is removed.
+const lockStart=workflow.indexOf('          if [ "$p12754_seen" = 1 ] && [ "$p12754_revision" = 6 ]; then');
+const lockEnd=workflow.indexOf('          # Only sync optional devices',lockStart);
+assert(lockStart>=0&&lockEnd>lockStart);
+const lockBlock=workflow.slice(lockStart,lockEnd);
+const temp=mkdtempSync(resolve('tools','.p545-lock-test-'));
+const lockDir=resolve(temp,'k/devices/starlte/tools');
+const K='a'.repeat(40),I='b'.repeat(40),wrong='c'.repeat(40);
+const W=temp.replaceAll('\\','/');
+const shim='git() { case "$2" in "$W/k") printf "%s\\n" "$MOCK_KERNEL";; "$W/k/devices/starlte") printf "%s\\n" "$MOCK_INSTALLER";; *) return 2;; esac; }\n';
+function checkLock(label,env,ok,marker){
+    const r=spawnSync(bash,['-eu','-o','pipefail','-s'],{input:shim+lockBlock,encoding:'utf8',
+        env:{...process.env,W,p12754_seen:'1',p12754_revision:'6',GITHUB_SHA:I,MOCK_KERNEL:K,MOCK_INSTALLER:I,USERDATA_BLOCKS:'starlte=13917184',...env}});
+    if(r.error)throw r.error;
+    assert.equal(r.status===0,ok,label+': '+r.stdout+r.stderr);
+    assert((r.stdout+r.stderr).includes(marker),label+': '+r.stdout+r.stderr);
+    console.log('PASS',label);tests++;
+}
+try{
+    mkdirSync(lockDir,{recursive:true});
+    checkLock('source lock missing',{},false,'missing published kernel source lock');
+    writeFileSync(resolve(lockDir,'p127545-kernel.sha'),'not-a-sha\n');
+    checkLock('source lock invalid',{},false,'exact kernel commit mismatch');
+    writeFileSync(resolve(lockDir,'p127545-kernel.sha'),K+'\r\n');
+    checkLock('source lock valid',{},true,'source lock verified');
+    checkLock('source lock kernel drift',{MOCK_KERNEL:wrong},false,'exact kernel commit mismatch');
+    checkLock('source lock installer drift',{MOCK_INSTALLER:wrong},false,'exact installer commit mismatch');
+    checkLock('source lock device scope',{USERDATA_BLOCKS:'star2lte=13917184'},false,'validated device scope');
+    checkLock('source lock legacy bypass',{p12754_revision:'5'},true,'');
+}finally{rmSync(temp,{recursive:true,force:true});}
+assert(workflow.includes('SOURCE-MANIFEST.json | cmp - "$P/SOURCE-MANIFEST.json"'));
+console.log('P1273/P1274/P12751/P12752/P12753/P12754/P127545 installer real shell negative/budget/source lock tests:',tests,'PASS (no native compiler or device test)');

@@ -624,8 +624,16 @@ jobs:
           p12752_seen=0
           p12753_seen=0
           p12754_seen=0
+          p127545_qch_seen=0
+          p127545_disp_seen=0
+          p127545_ect_seen=0
+          p12754_revision=5
           for token in $BOOT_ARGS; do
             case "$token" in
+              p127545_qch=1) p127545_qch_seen=$((p127545_qch_seen+1)) ;;
+              p127545_disp=1) p127545_disp_seen=$((p127545_disp_seen+1)) ;;
+              p127545_ect=1) p127545_ect_seen=$((p127545_ect_seen+1)) ;;
+              p127545=*|p127545_*=*) echo "::error::P127545 accepts only exact qch/disp/ect opt-ins; forbids boot-time control $token"; exit 1 ;;
               p12754=1) p12754_seen=$((p12754_seen+1)) ;;
               p12754=*|p12754_*=*|p127541=*|p127541_*=*|p127542=*|p127542_*=*|p127543=*|p127543_*=*|p127544=*|p127544_*=*) echo "::error::P12.7.5.4 accepts only exact p12754=1; forbids boot-time control $token"; exit 1 ;;
               p12753=1) p12753_seen=$((p12753_seen+1)) ;;
@@ -648,6 +656,13 @@ jobs:
           [ "$p12752_seen" -le 1 ] || { echo '::error::duplicate p12752=1'; exit 1; }
           [ "$p12753_seen" -le 1 ] || { echo '::error::duplicate p12753=1'; exit 1; }
           [ "$p12754_seen" -le 1 ] || { echo '::error::duplicate p12754=1'; exit 1; }
+          if [ "$((p127545_qch_seen+p127545_disp_seen+p127545_ect_seen))" -ne 0 ]; then
+            [ "$p12754_seen" -eq 1 ] || { echo '::error::P127545 requires p12754=1'; exit 1; }
+            [ "$p127545_qch_seen" -eq 1 ] && [ "$p127545_disp_seen" -eq 1 ] && [ "$p127545_ect_seen" -eq 1 ] || {
+              echo '::error::P127545 integrated build requires exactly one of each p127545_qch=1 p127545_disp=1 p127545_ect=1'; exit 1;
+            }
+            p12754_revision=6
+          fi
           if [ "$p12754_seen" -eq 1 ]; then
             [ "$p12753_seen" -eq 1 ] || { echo '::error::P12.7.5.4 requires p12753=1'; exit 1; }
             for token in $BOOT_ARGS; do
@@ -781,15 +796,36 @@ jobs:
             for src in drivers/power/exynos/hakios.p12753.h drivers/power/exynos/hakios.p1273_gate.h tools/s9-p125-timer-serial.ps1 tools/s9-p12-dual-serial.ps1 tools/tests/test-p12754-contract.js tools/tests/test-s9-p12754-serial.ps1 tools/s9-p127541-background.ps1 docs/s9-p12754-implementation-status.md userland/src/cputop.c userland/src/p127542_audio.h userland/src/sound_test.c userland/src/record_test.c userland/src/eagl.c; do
               test -s "$W/k/$src" || { echo "::error::P12.7.5.4 paired source missing: $src"; exit 1; }
             done
-            grep -Fq 'p12754_revision=5' "$W/k/drivers/power/exynos/hakios.p12753.h" || { echo "::error::P127544 requires kernel revision 5"; exit 1; }
+            grep -Fq "p12754_revision=$p12754_revision" "$W/k/drivers/power/exynos/hakios.p12753.h" || { echo "::error::P12754 requires paired kernel revision $p12754_revision"; exit 1; }
             node "$W/k/tools/tests/test-p12754-contract.js"
-            echo 'S9 P12.7.5.4.3 paired source preflight PASS (not hardware qualification)'
+            if [ "$p12754_revision" = 6 ]; then
+              for src in drivers/map drivers/display/hakios.p127545_disp_access.h drivers/bluetooth/bcm4361/hakios.p127545_hci.h drivers/soc/exynos/hakios.p127545_cmu.h drivers/soc/exynos/hakios.p127545_disp.h drivers/soc/exynos/hakios.p127545_ect.h drivers/soc/exynos/hakios.p127545_ect_abi.h drivers/soc/exynos/hakios.p127545_int_bounds.h xnuloader/p127545_ect.h tools/tests/test-p127545-contract.js tools/tests/test_s9_p127545_witness.c tools/tests/test_p127545_ect.py tools/p127545-ect.py docs/s9-p127545-implementation-status.md; do
+                test -s "$W/k/$src" || { echo "::error::P127545 paired source missing: $src"; exit 1; }
+              done
+              node "$W/k/tools/tests/test-p127545-contract.js"
+              python3 "$W/k/tools/tests/test_p127545_ect.py"
+              cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -g "$W/k/tools/tests/test_s9_p127545_witness.c" -o "$W/p127545-witness"
+              "$W/p127545-witness"
+              echo 'S9 P127545 revision 6 portable source preflight PASS; full native kernel/loader gates still required'
+            else
+              echo 'S9 P12.7.5.4.3 paired source preflight PASS (not hardware qualification)'
+            fi
           fi
           git clone -q --filter=blob:none https://github.com/Scion-Project/scion-installer.git "$W/pkg"
           git -C "$W/pkg" checkout -q "$PACKAGING_REF"
           # this run's own commit of the device repository, where tools/hakios-device.py sync would put it
           git clone -q --filter=blob:none "https://github.com/$GITHUB_REPOSITORY.git" "$W/k/devices/starlte"
           git -C "$W/k/devices/starlte" checkout -q "$GITHUB_SHA"
+          if [ "$p12754_seen" = 1 ] && [ "$p12754_revision" = 6 ]; then
+            lock="$W/k/devices/starlte/tools/p127545-kernel.sha"
+            test -s "$lock" || { echo '::error::P127545 missing published kernel source lock'; exit 1; }
+            want=$(tr -d '\r\n' < "$lock")
+            got=$(git -C "$W/k" rev-parse HEAD)
+            [[ "$want" =~ ^[0-9a-f]{40}$ ]] && [ "$got" = "$want" ] || { echo "::error::P127545 exact kernel commit mismatch: expected $want got $got"; exit 1; }
+            [ "$(git -C "$W/k/devices/starlte" rev-parse HEAD)" = "$GITHUB_SHA" ] || { echo '::error::P127545 exact installer commit mismatch'; exit 1; }
+            [ "$USERDATA_BLOCKS" = 'starlte=13917184' ] || { echo '::error::P127545 validated device scope is starlte=13917184'; exit 1; }
+            echo "P127545 source lock verified: kernel=$got installer=$GITHUB_SHA"
+          fi
           # Only sync optional devices being packaged; S9 itself is checked out above.
           [ -n "$USERDATA_BLOCKS" ] || { echo "::error::userdata_blocks is empty"; exit 1; }
           for pair in $USERDATA_BLOCKS; do
@@ -822,6 +858,7 @@ jobs:
           echo "p12752=$p12752_seen" >> "$GITHUB_OUTPUT"
           echo "p12753=$p12753_seen" >> "$GITHUB_OUTPUT"
           echo "p12754=$p12754_seen" >> "$GITHUB_OUTPUT"
+          echo "p12754_revision=$p12754_revision" >> "$GITHUB_OUTPUT"
           echo "m2v=$(cd "$W/k/userland" && cat ../tools/metal/mk-metal2vulkan.sh ../tools/metal/bridge/* ../tools/metal/*.metal ../tools/metal/m2v_test.c ../tools/metal/m2v/*.patch 2>/dev/null | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
 
       - name: Cache the theos toolchain and SDK
@@ -899,6 +936,15 @@ jobs:
             cmp xnu/files/hakios_p125.h "$XNU_TREE/osfmk/kern/hakios_p125.h" || { echo "::error::P127541 staged audio cache declaration mismatch"; exit 1; }
             cmp xnu/files/hakios_p125_impl.h "$XNU_TREE/osfmk/arm64/hakios_p125_impl.h" || { echo "::error::P127541 staged audio cache definition mismatch"; exit 1; }
             echo 'P127541 staged XNU headers verified'
+            if [ "${{ steps.sources.outputs.p12754_revision }}" = 6 ]; then
+              while read -r sub dst; do
+                case "$dst" in
+                  bsd/dev/hakios.p127545*.h)
+                    cmp "drivers/$sub/${dst##*/}" "$XNU_TREE/$dst" || { echo "::error::P127545 staged mismatch: $dst"; exit 1; } ;;
+                esac
+              done < drivers/map
+              echo 'P127545 staged headers verified'
+            fi
           fi
           xnu-deps/setup.sh || { for f in xnu-deps/*.log; do echo "== $f"; tail -60 "$f"; done; exit 1; }
 
@@ -1045,6 +1091,15 @@ jobs:
               exit 1
             }
             cp hakios-kernel "$W/kernels/kernel-$d"
+            if [ "${{ steps.sources.outputs.p12754 }}" = 1 ] && [ "${{ steps.sources.outputs.p12754_revision }}" = 6 ]; then
+              for sym in p127545_disp_stats p127545_mfc_stats p127545_hci p127545_ect_mif p127545_int_bounds p127545_panel; do
+                grep -aq "$sym" hakios-kernel || { echo "::error::P127545 $d kernel missing $sym"; exit 1; }
+              done
+              if [ "$d" = starlte ]; then
+                grep -aq 'p127545_cam_stats' hakios-kernel || { echo '::error::P127545 missing starlte ISPPRE stats'; exit 1; }
+              fi
+              echo "P127545 native linked $d kernel markers verified"
+            fi
             if [ -f xnu/p125-timer-observer.py ]; then
               grep -Fq 'P12.5 actual XNU EXPORT_HDRS preflight PASS' "$W/kernel-$d.log" || { echo '::error::P12.5 actual header-export check not executed'; exit 1; }
               mkdir -p "$W/p125-symbols"
@@ -1074,7 +1129,12 @@ jobs:
 
       - name: The loader (with the identity)
         working-directory: /mnt/w/k
-        run: make loader
+        run: |
+          make loader
+          if [ "${{ steps.sources.outputs.p12754 }}" = 1 ] && [ "${{ steps.sources.outputs.p12754_revision }}" = 6 ]; then
+            grep -aq 'hakios-ect-minlock' xnuloader/loader.efi || { echo '::error::P127545 linked EFI missing ECT handoff'; exit 1; }
+            echo 'P127545 native linked EFI marker verified'
+          fi
 
       - name: The small root and the system image (userland/build.sh; Mesa when the cache did not have it)
         working-directory: /mnt/w/k
@@ -1224,9 +1284,13 @@ jobs:
           P="$W/pack" && mkdir -p "$P"
           mv "$W/out/scion-exynos9810-installer-format-userdata.zip" "$P/"
           (cd "$P" && sha256sum scion-exynos9810-installer-format-userdata.zip > SHA256SUMS)
+          rev="${{ steps.sources.outputs.p12754_revision }}"
+          [ "${{ steps.sources.outputs.p12754 }}" = 1 ] || rev=0
+          python3 -c 'import json,sys; print(json.dumps(dict(kernel_commit=sys.argv[1],installer_commit=sys.argv[2],packaging_commit=sys.argv[3],p12754_revision=int(sys.argv[4]),run_id=sys.argv[5]),indent=2))' "$(git -C "$W/k" rev-parse HEAD)" "$GITHUB_SHA" "$(git -C "$W/pkg" rev-parse HEAD)" "$rev" "$GITHUB_RUN_ID" > "$P/SOURCE-MANIFEST.json"
           cat > "$P/README.txt" <<EOF
           Scion for the Galaxy S9 (SM-G960F), built $(date -u +%Y-%m-%d) by $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
-          kernel repo $(git -C "$W/k" rev-parse --short HEAD), device repo ${GITHUB_SHA::7}, system image to $PARTITION
+          kernel repo $(git -C "$W/k" rev-parse HEAD), device repo $GITHUB_SHA, system image to $PARTITION
+          Exact source commits are in SOURCE-MANIFEST.json; compare kernel_commit and installer_commit with the host kit manifest.
 
           THIS INSTALLER FORMATS USERDATA AS HFS PLUS: IT ERASES ANDROID'S DATA IN USERDATA
           (apps, photos, accounts). It is what makes /private/var persistent, so that the jailbreak
@@ -1254,12 +1318,13 @@ jobs:
           (mobile's default password is "alpine"; change it with passwd).
           EOF
           A="$W/upload/scion-exynos9810-installer-format-userdata.7z" && mkdir -p "$W/upload"
-          (cd "$P" && 7z a -t7z -mx=0 -mhe=on -p"$PASS" "$A" scion-exynos9810-installer-format-userdata.zip SHA256SUMS README.txt > /dev/null)
+          (cd "$P" && 7z a -t7z -mx=0 -mhe=on -p"$PASS" "$A" scion-exynos9810-installer-format-userdata.zip SHA256SUMS README.txt SOURCE-MANIFEST.json > /dev/null)
           # the archive opens with the passphrase, and the zip inside is the one made above
           7z t -p"$PASS" "$A" > /dev/null
           want=$(cut -d' ' -f1 "$P/SHA256SUMS")
           got=$(7z x -so -p"$PASS" "$A" scion-exynos9810-installer-format-userdata.zip | sha256sum | cut -d' ' -f1)
           [ "$got" = "$want" ] || { echo "::error::the zip inside the archive is not the installer"; exit 1; }
+          7z x -so -p"$PASS" "$A" SOURCE-MANIFEST.json | cmp - "$P/SOURCE-MANIFEST.json" || { echo "::error::source manifest mismatch"; exit 1; }
           rm -rf "$P"
           ls -la "$A"
           echo "installer sha256 $want (inside the encrypted archive)"
