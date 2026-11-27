@@ -627,7 +627,7 @@ jobs:
           for token in $BOOT_ARGS; do
             case "$token" in
               p12754=1) p12754_seen=$((p12754_seen+1)) ;;
-              p12754=*|p12754_*=*) echo "::error::P12.7.5.4 accepts only exact p12754=1; forbids boot-time control $token"; exit 1 ;;
+              p12754=*|p12754_*=*|p127541=*|p127541_*=*) echo "::error::P12.7.5.4 accepts only exact p12754=1; forbids boot-time control $token"; exit 1 ;;
               p12753=1) p12753_seen=$((p12753_seen+1)) ;;
               p12753=*|p12753_*=*) echo "::error::P12.7.5.3 accepts only exact p12753=1; forbids boot-time control $token"; exit 1 ;;
               p12752=1) p12752_seen=$((p12752_seen+1)) ;;
@@ -773,11 +773,12 @@ jobs:
             echo 'S9 P12.7.5.3 paired source preflight PASS (not hardware qualification)'
           fi
           if [ "$p12754_seen" -eq 1 ]; then
-            for src in drivers/power/exynos/hakios.p12753.h drivers/power/exynos/hakios.p1273_gate.h tools/s9-p125-timer-serial.ps1 tools/s9-p12-dual-serial.ps1 tools/tests/test-p12754-contract.js tools/tests/test-s9-p12754-serial.ps1 docs/s9-p12754-implementation-status.md; do
+            for src in drivers/power/exynos/hakios.p12753.h drivers/power/exynos/hakios.p1273_gate.h tools/s9-p125-timer-serial.ps1 tools/s9-p12-dual-serial.ps1 tools/tests/test-p12754-contract.js tools/tests/test-s9-p12754-serial.ps1 tools/s9-p127541-background.ps1 docs/s9-p12754-implementation-status.md; do
               test -s "$W/k/$src" || { echo "::error::P12.7.5.4 paired source missing: $src"; exit 1; }
             done
+            grep -Fq 'p12754_revision=2' "$W/k/drivers/power/exynos/hakios.p12753.h" || { echo "::error::P127541 requires kernel revision 2"; exit 1; }
             node "$W/k/tools/tests/test-p12754-contract.js"
-            echo 'S9 P12.7.5.4 paired source preflight PASS (not hardware qualification)'
+            echo 'S9 P12.7.5.4.1 paired source preflight PASS (not hardware qualification)'
           fi
           git clone -q --filter=blob:none https://github.com/Scion-Project/scion-installer.git "$W/pkg"
           git -C "$W/pkg" checkout -q "$PACKAGING_REF"
@@ -890,7 +891,9 @@ jobs:
             for f in hakios.p125_sysctl.h hakios.p1273_gate.h hakios.p12753.h; do
               cmp "drivers/power/exynos/$f" "$XNU_TREE/bsd/dev/$f" || { echo "::error::P12754 staged header mismatch: $f"; exit 1; }
             done
-            echo 'P12754 staged XNU headers verified'
+            cmp xnu/files/hakios_p125.h "$XNU_TREE/osfmk/kern/hakios_p125.h" || { echo "::error::P127541 staged audio cache declaration mismatch"; exit 1; }
+            cmp xnu/files/hakios_p125_impl.h "$XNU_TREE/osfmk/arm64/hakios_p125_impl.h" || { echo "::error::P127541 staged audio cache definition mismatch"; exit 1; }
+            echo 'P127541 staged XNU headers verified'
           fi
           xnu-deps/setup.sh || { for f in xnu-deps/*.log; do echo "== $f"; tail -60 "$f"; done; exit 1; }
 

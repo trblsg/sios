@@ -10,7 +10,7 @@ $commit=$KernelCommit
 $gitCmd=Get-Command git.exe -ErrorAction SilentlyContinue
 $git=if($gitCmd){$gitCmd.Source}else{'C:\Program Files\Git\cmd\git.exe'}
 if(-not (Test-Path -LiteralPath $git)){throw 'Git for Windows not found'}
-$files=@('s9-p1274-serial.ps1','s9-p125-timer-serial.ps1','s9-p12-dual-serial.ps1','s9-screen-lifecycle-serial.ps1')
+$files=@('s9-p1274-serial.ps1','s9-p125-timer-serial.ps1','s9-p12-dual-serial.ps1','s9-screen-lifecycle-serial.ps1','s9-p127541-background.ps1')
 # Scratch stays in workspace under .catdesk, never included in Git or ZIP.
 $work=Join-Path $root ('.catdesk\p12754-kit-'+[guid]::NewGuid().ToString('N'))
 $stage=Join-Path $work 'kit'
@@ -20,6 +20,8 @@ $source=Join-Path $work 'pinned.zip'
 if($LASTEXITCODE){throw 'Pinned kernel commit archive failed'}
 & $git -C $kernel show "$($commit):tools/tests/test-p12754-contract.js" | Out-Null
 if($LASTEXITCODE){throw 'Pinned kernel commit does not contain P12754 source contract'}
+$rev=& $git -C $kernel show "$($commit):drivers/power/exynos/hakios.p12753.h"
+if($LASTEXITCODE -or -not ($rev -match 'p12754_revision=2')){throw 'P127541 kit requires exact revision 2 kernel commit'}
 Expand-Archive -LiteralPath $source -DestinationPath (Join-Path $work 'source')
 foreach($f in $files){Copy-Item -LiteralPath (Join-Path $work "source\tools\$f") -Destination $stage}
 Copy-Item -LiteralPath (Join-Path $root 'docs\p12754-test.md') -Destination (Join-Path $stage 'README.md')

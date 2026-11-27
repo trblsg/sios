@@ -89,6 +89,8 @@ check(guard,p52+' p12754=1',ref,metal,false,'P12.7.5.4 requires p12753=1');
 check(guard,p53+' p12754=0',ref,metal,false,'P12.7.5.4 accepts only exact');
 check(guard,p54+' p12754=1',ref,metal,false,'duplicate p12754=1');
 check(guard,p54+' p12754_arm=1',ref,metal,false,'forbids boot-time control');
+check(guard,p54+' p127541=1',ref,metal,false,'forbids boot-time control');
+check(guard,p54+' p127541_stats=1',ref,metal,false,'forbids boot-time control');
 check(guard,p54+' bus_max=1',ref,metal,false,'independent idle baseline forbids');
 check(guard,p54,ref,metal,false,'paired source missing');
 console.log('P1273/P1274/P12751/P12752/P12753/P12754 installer real shell negative/budget tests:',tests,'PASS (no native compiler or device test)');
