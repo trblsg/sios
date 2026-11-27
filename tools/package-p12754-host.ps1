@@ -21,7 +21,7 @@ if($LASTEXITCODE){throw 'Pinned kernel commit archive failed'}
 & $git -C $kernel show "$($commit):tools/tests/test-p12754-contract.js" | Out-Null
 if($LASTEXITCODE){throw 'Pinned kernel commit does not contain P12754 source contract'}
 $rev=& $git -C $kernel show "$($commit):drivers/power/exynos/hakios.p12753.h"
-if($LASTEXITCODE -or -not ($rev -match 'p12754_revision=3')){throw 'P127542 kit requires exact revision 3 kernel commit'}
+if($LASTEXITCODE -or -not ($rev -match 'p12754_revision=4')){throw 'P127543 kit requires exact revision 4 kernel commit'}
 Expand-Archive -LiteralPath $source -DestinationPath (Join-Path $work 'source')
 foreach($f in $files){Copy-Item -LiteralPath (Join-Path $work "source\tools\$f") -Destination $stage}
 Copy-Item -LiteralPath (Join-Path $root 'docs\p12754-test.md') -Destination (Join-Path $stage 'README.md')
@@ -62,6 +62,10 @@ try{
         @{scenario='Audit53';extra=@('-P12754','-Audit53Module','STOCK60','-AllowOfflineTrial')},
         @{scenario='FunctionalGate';extra=@('-P12754','-GateModule','LITTLE949','-AllowFunctionalGate')},
         @{scenario='FunctionalGate';extra=@('-P12754','-GateModule','ABOX','-AllowFunctionalGate','-HeadlessAudio')},
+        @{scenario='FunctionalGate';extra=@('-P12754','-GateModule','WIFI','-AllowFunctionalGate','-HeadlessNetwork')},
+        @{scenario='IdleAssist543';extra=@('-P12754','-GateModule','BASE15','-AllowIdleAssist')},
+        @{scenario='IdleAssist543';extra=@('-P12754','-GateModule','ABOX','-AllowIdleAssist')},
+        @{scenario='FunctionalGate';extra=@('-P12754','-GateModule','LITTLE832','-AllowFunctionalGate','-AllowLowerFloor','-ConnectedFloorReport','prior.floor543-qualified.json')},
         @{scenario='Foreground542';extra=@('-P12754','-AllowGpu542','-Gpu542Mode','Baseline')},
         @{scenario='Foreground542';extra=@('-P12754','-AllowGpu542','-Gpu542Mode','IRQ')},
         @{scenario='Foreground542';extra=@('-P12754','-AllowGpu542','-Gpu542Mode','G2')},
