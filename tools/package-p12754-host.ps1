@@ -21,7 +21,7 @@ if($LASTEXITCODE){throw 'Pinned kernel commit archive failed'}
 & $git -C $kernel show "$($commit):tools/tests/test-p12754-contract.js" | Out-Null
 if($LASTEXITCODE){throw 'Pinned kernel commit does not contain P12754 source contract'}
 $rev=& $git -C $kernel show "$($commit):drivers/power/exynos/hakios.p12753.h"
-if($LASTEXITCODE -or -not ($rev -match 'p12754_revision=2')){throw 'P127541 kit requires exact revision 2 kernel commit'}
+if($LASTEXITCODE -or -not ($rev -match 'p12754_revision=3')){throw 'P127542 kit requires exact revision 3 kernel commit'}
 Expand-Archive -LiteralPath $source -DestinationPath (Join-Path $work 'source')
 foreach($f in $files){Copy-Item -LiteralPath (Join-Path $work "source\tools\$f") -Destination $stage}
 Copy-Item -LiteralPath (Join-Path $root 'docs\p12754-test.md') -Destination (Join-Path $stage 'README.md')
@@ -61,6 +61,11 @@ try{
         @{scenario='Hardware54';extra=@('-P12754')},
         @{scenario='Audit53';extra=@('-P12754','-Audit53Module','STOCK60','-AllowOfflineTrial')},
         @{scenario='FunctionalGate';extra=@('-P12754','-GateModule','LITTLE949','-AllowFunctionalGate')},
+        @{scenario='FunctionalGate';extra=@('-P12754','-GateModule','ABOX','-AllowFunctionalGate','-HeadlessAudio')},
+        @{scenario='Foreground542';extra=@('-P12754','-AllowGpu542','-Gpu542Mode','Baseline')},
+        @{scenario='Foreground542';extra=@('-P12754','-AllowGpu542','-Gpu542Mode','IRQ')},
+        @{scenario='Foreground542';extra=@('-P12754','-AllowGpu542','-Gpu542Mode','G2')},
+        @{scenario='Audit53';extra=@('-P12754','-Audit53Module','STOCK60','-AllowOfflineTrial','-WaitCoolSeconds','120')},
         @{scenario='Audit53';extra=@('-P12754','-Audit53Module','STOCK120','-AllowOfflineTrial')},
         @{scenario='Audit53';extra=@('-P12754','-Audit53Module','BASE15','-AllowOfflineTrial')},
         @{scenario='Audit53Recover';extra=@('-P12754','-Audit53Checkpoint','example.audit53-checkpoint.clixml')}
