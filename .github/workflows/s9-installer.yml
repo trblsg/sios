@@ -627,7 +627,7 @@ jobs:
           for token in $BOOT_ARGS; do
             case "$token" in
               p12754=1) p12754_seen=$((p12754_seen+1)) ;;
-              p12754=*|p12754_*=*|p127541=*|p127541_*=*|p127542=*|p127542_*=*|p127543=*|p127543_*=*) echo "::error::P12.7.5.4 accepts only exact p12754=1; forbids boot-time control $token"; exit 1 ;;
+              p12754=*|p12754_*=*|p127541=*|p127541_*=*|p127542=*|p127542_*=*|p127543=*|p127543_*=*|p127544=*|p127544_*=*) echo "::error::P12.7.5.4 accepts only exact p12754=1; forbids boot-time control $token"; exit 1 ;;
               p12753=1) p12753_seen=$((p12753_seen+1)) ;;
               p12753=*|p12753_*=*) echo "::error::P12.7.5.3 accepts only exact p12753=1; forbids boot-time control $token"; exit 1 ;;
               p12752=1) p12752_seen=$((p12752_seen+1)) ;;
@@ -650,6 +650,11 @@ jobs:
           [ "$p12754_seen" -le 1 ] || { echo '::error::duplicate p12754=1'; exit 1; }
           if [ "$p12754_seen" -eq 1 ]; then
             [ "$p12753_seen" -eq 1 ] || { echo '::error::P12.7.5.4 requires p12753=1'; exit 1; }
+            for token in $BOOT_ARGS; do
+              case "$token" in
+                mfc_mif_khz=*|mfc_int_khz=*|cpufreq_lit=*|bus_mif=*|bus_mif_delay=*) echo "::error::P127544 forbids unqualified DVFS override $token"; exit 1 ;;
+              esac
+            done
           fi
           if [ "$p12753_seen" -eq 1 ]; then
             [ "$p12752_seen" -eq 1 ] || { echo '::error::P12.7.5.3 requires p12752=1'; exit 1; }
@@ -776,7 +781,7 @@ jobs:
             for src in drivers/power/exynos/hakios.p12753.h drivers/power/exynos/hakios.p1273_gate.h tools/s9-p125-timer-serial.ps1 tools/s9-p12-dual-serial.ps1 tools/tests/test-p12754-contract.js tools/tests/test-s9-p12754-serial.ps1 tools/s9-p127541-background.ps1 docs/s9-p12754-implementation-status.md userland/src/cputop.c userland/src/p127542_audio.h userland/src/sound_test.c userland/src/record_test.c userland/src/eagl.c; do
               test -s "$W/k/$src" || { echo "::error::P12.7.5.4 paired source missing: $src"; exit 1; }
             done
-            grep -Fq 'p12754_revision=4' "$W/k/drivers/power/exynos/hakios.p12753.h" || { echo "::error::P127543 requires kernel revision 4"; exit 1; }
+            grep -Fq 'p12754_revision=5' "$W/k/drivers/power/exynos/hakios.p12753.h" || { echo "::error::P127544 requires kernel revision 5"; exit 1; }
             node "$W/k/tools/tests/test-p12754-contract.js"
             echo 'S9 P12.7.5.4.3 paired source preflight PASS (not hardware qualification)'
           fi

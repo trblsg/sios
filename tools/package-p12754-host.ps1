@@ -21,7 +21,7 @@ if($LASTEXITCODE){throw 'Pinned kernel commit archive failed'}
 & $git -C $kernel show "$($commit):tools/tests/test-p12754-contract.js" | Out-Null
 if($LASTEXITCODE){throw 'Pinned kernel commit does not contain P12754 source contract'}
 $rev=& $git -C $kernel show "$($commit):drivers/power/exynos/hakios.p12753.h"
-if($LASTEXITCODE -or -not ($rev -match 'p12754_revision=4')){throw 'P127543 kit requires exact revision 4 kernel commit'}
+if($LASTEXITCODE -or -not ($rev -match 'p12754_revision=5')){throw 'P127544 kit requires exact revision 5 kernel commit'}
 Expand-Archive -LiteralPath $source -DestinationPath (Join-Path $work 'source')
 foreach($f in $files){Copy-Item -LiteralPath (Join-Path $work "source\tools\$f") -Destination $stage}
 Copy-Item -LiteralPath (Join-Path $root 'docs\p12754-test.md') -Destination (Join-Path $stage 'README.md')
@@ -60,6 +60,9 @@ try{
         @{scenario='Guard53';extra=@('-P12754')},
         @{scenario='Hardware54';extra=@('-P12754')},
         @{scenario='Audit53';extra=@('-P12754','-Audit53Module','STOCK60','-AllowOfflineTrial')},
+        @{scenario='Audit53';extra=@('-P12754','-Audit53Module','STOCK60','-WarmAudit','-AllowOfflineTrial')},
+        @{scenario='Audit53';extra=@('-P12754','-Audit53Module','COMPOSITE544','-WarmAudit','-AllowComposite544','-AllowOfflineTrial')},
+        @{scenario='IdleAssist543';extra=@('-P12754','-GateModule','LITTLE598','-AllowIdleAssist','-AssistSeconds','240')},
         @{scenario='FunctionalGate';extra=@('-P12754','-GateModule','LITTLE949','-AllowFunctionalGate')},
         @{scenario='FunctionalGate';extra=@('-P12754','-GateModule','ABOX','-AllowFunctionalGate','-HeadlessAudio')},
         @{scenario='FunctionalGate';extra=@('-P12754','-GateModule','WIFI','-AllowFunctionalGate','-HeadlessNetwork')},
