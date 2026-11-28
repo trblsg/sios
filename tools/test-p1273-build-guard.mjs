@@ -104,6 +104,18 @@ check(guard,p54+' bus_max=1',ref,metal,false,'independent idle baseline forbids'
 check(guard,p54,ref,metal,false,'paired source missing');
 const p545=p54+' p127545_qch=1 p127545_disp=1 p127545_ect=1';
 check(budget,p545,ref,metal,true,'250 / 280 bytes');
+const p77=p545+' p1277=1';
+const rev7ref='s9/p12-4-guarded-thermal-rev7';
+check(guard,p77,ref,metal,false,'P1277 requires kernel_ref=');
+check(guard,p545,rev7ref,metal,false,'Rev7 kernel branch requires p1277=1');
+check(guard,p77,rev7ref,metal,false,'paired source missing');
+check(budget,p77,ref,metal,true,'258 / 280 bytes');
+check(budget,p77+' p1277_psci=1',ref,metal,true,'271 / 280 bytes');
+check(guard,p54+' p1277=1',ref,metal,false,'all Rev6 prerequisites');
+check(guard,p77+' p1277=1',ref,metal,false,'exactly one p1277=1');
+check(guard,p77+' p1277_auto_idle=1',ref,metal,false,'forbids boot-time control');
+check(guard,p77+' mali_dvs=1',rev7ref,metal,false,'forbids boot-time optimization override');
+check(guard,p77+' p1277_psci=1 p1277_psci=1',ref,metal,false,'at most one PSCI opt-in');
 check(guard,'p127545_qch=1 p127545_disp=1 p127545_ect=1',ref,metal,false,'P127545 requires p12754=1');
 check(guard,p54+' p127545_qch=1',ref,metal,false,'requires exactly one of each');
 check(guard,p545+' p127545_qch=1',ref,metal,false,'requires exactly one of each');
@@ -143,6 +155,10 @@ try{
     checkLock('source lock installer drift',{MOCK_INSTALLER:wrong},false,'exact installer commit mismatch');
     checkLock('source lock device scope',{USERDATA_BLOCKS:'star2lte=13917184'},false,'validated device scope');
     checkLock('source lock legacy bypass',{p12754_revision:'5'},true,'');
+    checkLock('Rev7 cannot use Rev6 lock',{p1277_seen:'1'},false,'missing published kernel source lock');
+    writeFileSync(resolve(lockDir,'p1277-kernel.sha'),K+'\n');
+    checkLock('Rev7 exact source lock',{p1277_seen:'1'},true,'source lock verified');
+    checkLock('Rev7 rejects kernel drift',{p1277_seen:'1',MOCK_KERNEL:wrong},false,'exact kernel commit mismatch');
 }finally{rmSync(temp,{recursive:true,force:true});}
 assert(workflow.includes('SOURCE-MANIFEST.json | cmp - "$P/SOURCE-MANIFEST.json"'));
 console.log('P1273/P1274/P12751/P12752/P12753/P12754/P127545 installer real shell negative/budget/source lock tests:',tests,'PASS (no native compiler or device test)');
