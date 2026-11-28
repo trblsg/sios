@@ -627,11 +627,14 @@ jobs:
           p127545_qch_seen=0
           p127545_disp_seen=0
           p127545_ect_seen=0
+          p1278_seen=0
           p1277_seen=0
           p1277_psci_seen=0
           p12754_revision=5
           for token in $BOOT_ARGS; do
             case "$token" in
+              p1278=1) p1278_seen=$((p1278_seen+1)) ;;
+              p1278=*|p1278_*=*) echo "::error::P1278 accepts permission-only p1278=1; forbids boot-time control $token"; exit 1 ;;
               p1277=1) p1277_seen=$((p1277_seen+1)) ;;
               p1277_psci=1) p1277_psci_seen=$((p1277_psci_seen+1)) ;;
               p1277=*|p1277_*=*) echo "::error::P1277 installer accepts permission-only p1277=1 and optional p1277_psci=1; forbids boot-time control $token"; exit 1 ;;
@@ -668,13 +671,17 @@ jobs:
             }
             p12754_revision=6
           fi
+          if [ "$KERNEL_REF" = s9/p12-4-guarded-thermal-rev8 ] || [ "$p1278_seen" -ne 0 ]; then
+            [ "$KERNEL_REF" = s9/p12-4-guarded-thermal-rev8 ] && [ "$p1278_seen" = 1 ] && [ "$p1277_seen" = 1 ] && [ "$p1277_psci_seen" = 0 ] ||
+              { echo '::error::P1278 requires exact Rev8 branch and one p1277=1 p1278=1; PSCI opt-in disabled'; exit 1; }
+          fi
           if [ "$KERNEL_REF" = s9/p12-4-guarded-thermal-rev7 ] && [ "$p1277_seen" -ne 1 ]; then
             echo '::error::Rev7 kernel branch requires p1277=1'; exit 1
           fi
           if [ "$p1277_seen" -ne 0 ] || [ "$p1277_psci_seen" -ne 0 ]; then
             [ "$p1277_seen" -eq 1 ] && [ "$p1277_psci_seen" -le 1 ] && [ "$p12754_revision" -eq 6 ] ||
               { echo '::error::P1277 requires exactly one p1277=1, at most one PSCI opt-in and all Rev6 prerequisites'; exit 1; }
-            [ "$KERNEL_REF" = s9/p12-4-guarded-thermal-rev7 ] || { echo '::error::P1277 requires kernel_ref=s9/p12-4-guarded-thermal-rev7'; exit 1; }
+            [ "$KERNEL_REF" = s9/p12-4-guarded-thermal-rev7 ] || { [ "$p1278_seen" = 1 ] && [ "$KERNEL_REF" = s9/p12-4-guarded-thermal-rev8 ]; } || { echo '::error::P1277 requires kernel_ref=s9/p12-4-guarded-thermal-rev7'; exit 1; }
             for token in $BOOT_ARGS; do
               case "$token" in
                 mali_dvs=*|mali_irq=*|p9_panel_mode=*|panel_sleep=*|sleep_cores=*|g2_bind=*)
@@ -734,7 +741,7 @@ jobs:
           if [ "$p1273_seen" -eq 1 ]; then
             # The older nested P12.4 guards use branch-name matching.
             # Never allow a SHA/other branch to bypass the complete guard set.
-            [ "$KERNEL_REF" = s9/p12-4-guarded-thermal ] || { [ "$p1277_seen" = 1 ] && [ "$KERNEL_REF" = s9/p12-4-guarded-thermal-rev7 ]; } ||
+            [ "$KERNEL_REF" = s9/p12-4-guarded-thermal ] || { [ "$p1277_seen" = 1 ] && { [ "$KERNEL_REF" = s9/p12-4-guarded-thermal-rev7 ] || [ "$KERNEL_REF" = s9/p12-4-guarded-thermal-rev8 ]; }; } ||
               { echo '::error::P12.7.3 requires kernel_ref=s9/p12-4-guarded-thermal'; exit 1; }
             for required in hi=2 panel=1 p122=1 p12_gpu_boot_auto=1 mali_gov=1 mali_gov_frame=450 mali_probe=1 p3power=1 max77705_fg_s=10; do
               name=${required%%=*}
@@ -839,6 +846,14 @@ jobs:
             "$W/p1277-idle"
             echo 'P1277 portable source and mock preflight PASS; native compile still required'
           fi
+          if [ "$p1278_seen" = 1 ]; then
+            for src in drivers/display/hakios.p1278_panel.h tools/tests/test-p1278-contract.js tools/tests/test_s9_p1278_panel.c tools/s9-p1278-suite-lib.ps1 tools/s9-p1277-suite-lib.ps1 docs/s9-p1278.md; do
+              test -s "$W/k/$src" || { echo "::error::P1278 paired source missing: $src"; exit 1; }
+            done
+            node "$W/k/tools/tests/test-p1278-contract.js"
+            cc -std=c11 -O2 -Wall -Wextra "$W/k/tools/tests/test_s9_p1278_panel.c" -o "$W/p1278-panel"
+            "$W/p1278-panel"
+          fi
           git clone -q --filter=blob:none https://github.com/Scion-Project/scion-installer.git "$W/pkg"
           git -C "$W/pkg" checkout -q "$PACKAGING_REF"
           # this run's own commit of the device repository, where tools/hakios-device.py sync would put it
@@ -847,6 +862,7 @@ jobs:
           if [ "$p12754_seen" = 1 ] && [ "$p12754_revision" = 6 ]; then
             lock="$W/k/devices/starlte/tools/p127545-kernel.sha"
             if [ "${p1277_seen:-0}" = 1 ]; then lock="$W/k/devices/starlte/tools/p1277-kernel.sha"; fi
+            if [ "${p1278_seen:-0}" = 1 ]; then lock="$W/k/devices/starlte/tools/p1278-kernel.sha"; fi
             test -s "$lock" || { echo '::error::P127545 missing published kernel source lock'; exit 1; }
             want=$(tr -d '\r\n' < "$lock")
             got=$(git -C "$W/k" rev-parse HEAD)
@@ -889,6 +905,7 @@ jobs:
           echo "p12754=$p12754_seen" >> "$GITHUB_OUTPUT"
           echo "p12754_revision=$p12754_revision" >> "$GITHUB_OUTPUT"
           echo "p1277=$p1277_seen" >> "$GITHUB_OUTPUT"
+          echo "p1278=$p1278_seen" >> "$GITHUB_OUTPUT"
           echo "m2v=$(cd "$W/k/userland" && cat ../tools/metal/mk-metal2vulkan.sh ../tools/metal/bridge/* ../tools/metal/*.metal ../tools/metal/m2v_test.c ../tools/metal/m2v/*.patch 2>/dev/null | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
 
       - name: Cache the theos toolchain and SDK
@@ -977,6 +994,9 @@ jobs:
             fi
             if [ "${{ steps.sources.outputs.p1277 }}" = 1 ]; then
               cmp drivers/power/exynos/hakios.p1277_idle.h "$XNU_TREE/bsd/dev/hakios.p1277_idle.h" || { echo '::error::P1277 staged header mismatch'; exit 1; }
+            fi
+            if [ "${{ steps.sources.outputs.p1278 }}" = 1 ]; then
+              cmp drivers/display/hakios.p1278_panel.h "$XNU_TREE/bsd/dev/hakios.p1278_panel.h" || { echo '::error::P1278 staged header mismatch'; exit 1; }
             fi
           fi
           xnu-deps/setup.sh || { for f in xnu-deps/*.log; do echo "== $f"; tail -60 "$f"; done; exit 1; }
@@ -1136,6 +1156,11 @@ jobs:
             if [ "${{ steps.sources.outputs.p1277 }}" = 1 ]; then
               for sym in p1277_revision p1277_auto_stats p1277_layer2_stats p1277_burst_stats p1277_gpu_dvs_stats p1277_panel_stats p1277_psci_stats; do
                 grep -aq "$sym" hakios-kernel || { echo "::error::P1277 linked kernel missing $sym"; exit 1; }
+              done
+            fi
+            if [ "${{ steps.sources.outputs.p1278 }}" = 1 ]; then
+              for sym in p1278_revision p1278_panel_stats p1278_panel_mode p1278_panel_review p1278_irq_stats p1278_active_stats; do
+                grep -aq "$sym" hakios-kernel || { echo "::error::P1278 linked kernel missing $sym"; exit 1; }
               done
             fi
             if [ -f xnu/p125-timer-observer.py ]; then
@@ -1324,7 +1349,7 @@ jobs:
           (cd "$P" && sha256sum scion-exynos9810-installer-format-userdata.zip > SHA256SUMS)
           rev="${{ steps.sources.outputs.p12754_revision }}"
           [ "${{ steps.sources.outputs.p12754 }}" = 1 ] || rev=0
-          python3 -c 'import json,sys; print(json.dumps(dict(kernel_commit=sys.argv[1],installer_commit=sys.argv[2],packaging_commit=sys.argv[3],p12754_revision=int(sys.argv[4]),run_id=sys.argv[5],p1277_revision=int(sys.argv[6])),indent=2))' "$(git -C "$W/k" rev-parse HEAD)" "$GITHUB_SHA" "$(git -C "$W/pkg" rev-parse HEAD)" "$rev" "$GITHUB_RUN_ID" "$(if [ "${{ steps.sources.outputs.p1277 }}" = 1 ]; then echo 7; else echo 0; fi)" > "$P/SOURCE-MANIFEST.json"
+          python3 -c 'import json,sys; print(json.dumps(dict(kernel_commit=sys.argv[1],installer_commit=sys.argv[2],packaging_commit=sys.argv[3],p12754_revision=int(sys.argv[4]),run_id=sys.argv[5],p1277_revision=int(sys.argv[6]),p1278_revision=int(sys.argv[7])),indent=2))' "$(git -C "$W/k" rev-parse HEAD)" "$GITHUB_SHA" "$(git -C "$W/pkg" rev-parse HEAD)" "$rev" "$GITHUB_RUN_ID" "$(if [ "${{ steps.sources.outputs.p1277 }}" = 1 ]; then echo 7; else echo 0; fi)" "$(if [ "${{ steps.sources.outputs.p1278 }}" = 1 ]; then echo 8; else echo 0; fi)" > "$P/SOURCE-MANIFEST.json"
           cat > "$P/README.txt" <<EOF
           Scion for the Galaxy S9 (SM-G960F), built $(date -u +%Y-%m-%d) by $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
           kernel repo $(git -C "$W/k" rev-parse HEAD), device repo $GITHUB_SHA, system image to $PARTITION

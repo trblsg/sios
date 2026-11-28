@@ -110,6 +110,15 @@ check(guard,p77,ref,metal,false,'P1277 requires kernel_ref=');
 check(guard,p545,rev7ref,metal,false,'Rev7 kernel branch requires p1277=1');
 check(guard,p77,rev7ref,metal,false,'paired source missing');
 check(budget,p77,ref,metal,true,'258 / 280 bytes');
+const p78=p77+' p1278=1';
+const rev8ref='s9/p12-4-guarded-thermal-rev8';
+check(budget,p78,rev8ref,metal,true,'266 / 280 bytes');
+check(guard,p77,rev8ref,metal,false,'P1278 requires exact Rev8 branch');
+check(guard,p78,rev7ref,metal,false,'P1278 requires exact Rev8 branch');
+check(guard,p78+' p1278=1',rev8ref,metal,false,'P1278 requires exact Rev8 branch');
+check(guard,p78+' p1278_panel_mode=2',rev8ref,metal,false,'forbids boot-time control');
+check(guard,p78+' p1277_psci=1',rev8ref,metal,false,'PSCI opt-in disabled');
+check(guard,p78,rev8ref,metal,false,'paired source missing');
 check(budget,p77+' p1277_psci=1',ref,metal,true,'271 / 280 bytes');
 check(guard,p54+' p1277=1',ref,metal,false,'all Rev6 prerequisites');
 check(guard,p77+' p1277=1',ref,metal,false,'exactly one p1277=1');
@@ -159,6 +168,10 @@ try{
     writeFileSync(resolve(lockDir,'p1277-kernel.sha'),K+'\n');
     checkLock('Rev7 exact source lock',{p1277_seen:'1'},true,'source lock verified');
     checkLock('Rev7 rejects kernel drift',{p1277_seen:'1',MOCK_KERNEL:wrong},false,'exact kernel commit mismatch');
+    checkLock('Rev8 cannot use Rev7 lock',{p1277_seen:'1',p1278_seen:'1'},false,'missing published kernel source lock');
+    writeFileSync(resolve(lockDir,'p1278-kernel.sha'),K+'\n');
+    checkLock('Rev8 exact source lock',{p1277_seen:'1',p1278_seen:'1'},true,'source lock verified');
+    checkLock('Rev8 rejects kernel drift',{p1277_seen:'1',p1278_seen:'1',MOCK_KERNEL:wrong},false,'exact kernel commit mismatch');
 }finally{rmSync(temp,{recursive:true,force:true});}
 assert(workflow.includes('SOURCE-MANIFEST.json | cmp - "$P/SOURCE-MANIFEST.json"'));
 console.log('P1273/P1274/P12751/P12752/P12753/P12754/P127545 installer real shell negative/budget/source lock tests:',tests,'PASS (no native compiler or device test)');
